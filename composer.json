@@ -1,0 +1,20 @@
+{
+  "name": "rafalmasiarek/csrf-token",
+  "description": "Encrypted CSRF token library with fingerprint and caching (file, MySQL, Redis)",
+  "type": "library",
+  "require": {
+    "php": ">=7.4"
+  },
+  "autoload": {
+    "psr-4": {
+      "CsrfToken\\": "src/"
+    }
+  },
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Rafal Maiarek",
+      "email": "rafal@masiarek.pl"
+    }
+  ]
+}
