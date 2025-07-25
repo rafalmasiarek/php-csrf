@@ -1,6 +1,6 @@
 <?php
 
-namespace CsrfToken\Security;
+namespace rafalmasiarek\CsrfToken;
 
 class EncryptedCsrfToken
 {

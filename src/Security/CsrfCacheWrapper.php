@@ -1,8 +1,8 @@
 <?php
 
-namespace CsrfToken\Security;
+namespace rafalmasiarek\CsrfToken;
 
-use CsrfToken\Storage\CsrfStorageInterface;
+use rafalmasiarek\CsrfToken\Storage\CsrfStorageInterface;
 
 class CsrfCacheWrapper
 {

@@ -1,6 +1,6 @@
 <?php
 
-namespace CsrfToken\Storage;
+namespace rafalmasiarek\CsrfToken\Storage;
 
 interface CsrfStorageInterface
 {

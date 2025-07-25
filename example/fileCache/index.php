@@ -2,9 +2,9 @@
 session_start();
 require __DIR__ . '/../../vendor/autoload.php';
 
-use CsrfToken\Security\EncryptedCsrfToken;
-use CsrfToken\Security\CsrfCacheWrapper;
-use CsrfToken\Storage\FileStorage;
+use rafalmasiarek\CsrfToken\EncryptedCsrfToken;
+use rafalmasiarek\CsrfToken\CsrfCacheWrapper;
+use rafalmasiarek\CsrfToken\Storage\FileStorage;
 
 $key = hash('sha256', 'your-very-secret-key_kmd6xeWlXWF7', true); // 32 bytes
 

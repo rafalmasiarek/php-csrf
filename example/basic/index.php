@@ -2,7 +2,7 @@
 session_start();
 require __DIR__ . '/../../vendor/autoload.php';
 
-use CsrfToken\Security\EncryptedCsrfToken;
+use rafalmasiarek\CsrfToken\EncryptedCsrfToken;
 
 $key = hash('sha256', 'your-very-secret-key_kmd6xeWlXWF7', true); // 32 bytes
 $csrf = new EncryptedCsrfToken($key);
