@@ -73,7 +73,7 @@ class EncryptedCsrfToken
     }
 
     /**
-     * Generates a new CSRF token.
+     * Generates a new CSRF token or reuses an existing one if it is still valid.
      *
      * @return string The encrypted CSRF token.
      */
@@ -91,14 +91,22 @@ class EncryptedCsrfToken
     // and has not been tampered with.  
     public function generate(): string
     {
-        $token = bin2hex(random_bytes(32));
-        $_SESSION[$this->sessionKey] = $token;
+        $state = $_SESSION[$this->sessionKey] ?? null;
+        $hasState = is_array($state) && isset($state['token'], $state['iat']) && is_string($state['token']) && is_int($state['iat']);
+
+        if (!$hasState || $this->isExpired($state)) {
+            $state = [
+                'token' => bin2hex(random_bytes(32)),
+                'iat'   => time(),
+            ];
+            $_SESSION[$this->sessionKey] = $state;
+        }
 
         $payload = [
-            'token' => $token,
+            'token' => $state['token'],
             'ip' => $_SERVER['REMOTE_ADDR'] ?? '',
             'ua' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-            'iat' => time(),
+            'iat' => $state['iat'],
         ];
 
         $this->lastPayload = $payload;
@@ -136,18 +144,24 @@ class EncryptedCsrfToken
 
         $this->lastPayload = $payload;
 
+        $state = $_SESSION[$this->sessionKey] ?? null;
+        if (!is_array($state) || !isset($state['token'], $state['iat'])) {
+            return false;
+        }
+
         if (
-            $payload['token'] !== ($_SESSION[$this->sessionKey] ?? null) ||
+            $payload['token'] !== $state['token'] ||
             $payload['ip'] !== ($_SERVER['REMOTE_ADDR'] ?? '') ||
             $payload['ua'] !== ($_SERVER['HTTP_USER_AGENT'] ?? '')
         ) {
             return false;
         }
 
-        if (time() - $payload['iat'] > $this->ttl) {
+        if ($this->isExpired($state)) {
             return false;
         }
 
+        unset($_SESSION[$this->sessionKey]); // burn after successful validation
         return true;
     }
 
@@ -176,24 +190,65 @@ class EncryptedCsrfToken
     // by avoiding repeated decryption of the same token.
     // It is typically called when the application needs to validate a CSRF token
     // that has been previously generated and cached, such as when processing a form submission
-    // or an AJAX request that includes the CSRF token in the payload.  
+    // or an AJAX request that includes the CSRF token in the payload.
     public function validateCached(array $payload): bool
     {
         $this->lastPayload = $payload;
 
+        $state = $_SESSION[$this->sessionKey] ?? null;
+        if (!is_array($state) || !isset($state['token'], $state['iat'])) {
+            return false;
+        }
+
         if (
-            $payload['token'] !== ($_SESSION[$this->sessionKey] ?? null) ||
+            $payload['token'] !== $state['token'] ||
             $payload['ip'] !== ($_SERVER['REMOTE_ADDR'] ?? '') ||
             $payload['ua'] !== ($_SERVER['HTTP_USER_AGENT'] ?? '')
         ) {
             return false;
         }
 
-        if (time() - $payload['iat'] > $this->ttl) {
+        if ($this->isExpired($state)) {
             return false;
         }
 
+        unset($_SESSION[$this->sessionKey]); // burn after successful validation
         return true;
+    }
+
+    /**
+     * Force generate a brand new CSRF token, ignoring any existing one.
+     *
+     * @return string The new encrypted CSRF token.
+     */
+    // This method removes any existing token from the session and generates a completely new one.
+    // It can be used when a manual regeneration of the token is required.
+    public function regenerate(): string
+    {
+        unset($_SESSION[$this->sessionKey]);
+        return $this->generate();
+    }
+
+    /**
+     * Get remaining lifetime of the current CSRF token in seconds.
+     *
+     * @return int|null Remaining seconds, 0 if expired, null if no token exists.
+     */
+    // This method returns how many seconds remain before the current token expires.
+    // It returns null if there is no token in the session, or 0 if it has already expired.
+    public function getExpiresIn(): ?int
+    {
+        $state = $_SESSION[$this->sessionKey] ?? null;
+        if (!is_array($state) || !isset($state['iat']) || !is_int($state['iat'])) {
+            return null;
+        }
+
+        $elapsed = time() - $state['iat'];
+        if ($elapsed >= $this->ttl) {
+            return 0;
+        }
+
+        return $this->ttl - $elapsed;
     }
 
     /**
@@ -227,6 +282,22 @@ class EncryptedCsrfToken
     public function clear(): void
     {
         unset($_SESSION[$this->sessionKey]);
+    }
+
+    /**
+     * Checks whether a given session token state is expired or invalid.
+     *
+     * @param array|null $state The session state array.
+     * @return bool True if expired or invalid, false otherwise.
+     */
+    // This private helper method checks if the provided token state is expired or invalid.
+    // It is used internally to avoid repeating TTL validation logic in multiple methods.
+    private function isExpired(?array $state): bool
+    {
+        if (!is_array($state) || !isset($state['iat']) || !is_int($state['iat'])) {
+            return true;
+        }
+        return (time() - $state['iat']) > $this->ttl;
     }
 
     /**
