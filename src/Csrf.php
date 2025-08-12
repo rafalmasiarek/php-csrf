@@ -1,8 +1,8 @@
 <?php
 
-namespace rafalmasiarek\CsrfToken;
+namespace rafalmasiarek\Csrf;
 
-class EncryptedCsrfToken
+class Csrf
 {
     /**
      * @var string
@@ -54,6 +54,18 @@ class EncryptedCsrfToken
     // the lifetime of the EncryptedCsrfToken instance.
     // This property is useful for applications that need to log or debug CSRF token usage.
     private ?array $lastPayload = null;
+
+    /**
+     * Returns the time-to-live (TTL) for CSRF tokens in seconds.
+     *
+     * This value defines how long a generated CSRF token remains valid.
+     *
+     * @return int The TTL in seconds.
+     */
+    public function getTtl(): int
+    {
+        return $this->ttl;
+    }
 
     /**
      * Constructor for the EncryptedCsrfToken.
@@ -161,7 +173,7 @@ class EncryptedCsrfToken
             return false;
         }
 
-        unset($_SESSION[$this->sessionKey]); // burn after successful validation
+        $this->clear(); // burn after successful validation
         return true;
     }
 
@@ -292,7 +304,7 @@ class EncryptedCsrfToken
      */
     // This private helper method checks if the provided token state is expired or invalid.
     // It is used internally to avoid repeating TTL validation logic in multiple methods.
-    private function isExpired(?array $state): bool
+    public function isExpired(?array $state): bool
     {
         if (!is_array($state) || !isset($state['iat']) || !is_int($state['iat'])) {
             return true;

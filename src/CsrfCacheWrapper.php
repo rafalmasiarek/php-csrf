@@ -1,8 +1,8 @@
 <?php
 
-namespace rafalmasiarek\CsrfToken;
+namespace rafalmasiarek\Csrf;
 
-use rafalmasiarek\CsrfToken\Storage\CsrfStorageInterface;
+use rafalmasiarek\Csrf\Csrf;
 
 class CsrfCacheWrapper
 {
@@ -13,7 +13,7 @@ class CsrfCacheWrapper
     // It checks the cache first before validating the token, and stores the payload
     // in the cache if validation is successful and not in read-only mode.
     //
-    private EncryptedCsrfToken $core;
+    private Csrf $core;
 
     /**
      * @var CsrfStorageInterface
@@ -35,18 +35,45 @@ class CsrfCacheWrapper
     /**
      * Constructor for the CsrfCacheWrapper.
      *
-     * @param EncryptedCsrfToken $core The core CSRF token handler.
+     * @param Csrf $core The core CSRF token handler.
      * @param CsrfStorageInterface $cache The storage interface for caching tokens.
      * @param bool $readOnly Whether to operate in read-only mode (default: false).
      */
     // Initializes the wrapper with the core CSRF token handler and the cache storage.
     // If readOnly is true, it will not store tokens in the cache.
     // This allows for flexibility in how the CSRF tokens are validated and cached.
-    public function __construct(EncryptedCsrfToken $core, CsrfStorageInterface $cache, bool $readOnly = false)
+    public function __construct(Csrf $core, CsrfStorageInterface $cache, bool $readOnly = false)
     {
         $this->core = $core;
         $this->cache = $cache;
         $this->readOnly = $readOnly;
+    }
+
+
+    /**
+     * Generates a CSRF token and stores the payload in cache (if enabled).
+     *
+     * @return string The encrypted CSRF token.
+     */
+    // This method generates a CSRF token using the core CSRF token handler.
+    // It retrieves the last payload from the core handler and stores it in the cache if not in read-only mode.
+    // The generated token is then returned for use in forms or API requests.
+    // This allows for efficient generation and caching of CSRF tokens, improving performance.
+    // The token is encrypted and can be used to protect against CSRF attacks.
+    // It ensures that the token is unique and securely stored.
+    // This method is typically called when rendering a form or preparing an API request.
+    // It is essential for generating secure tokens that can be validated later.
+    // The cache is used to avoid redundant validations of the same token.
+    public function generate(): string
+    {
+        $token = $this->core->generate();
+        $payload = $this->core->getLastPayload();
+
+        if (!$this->readOnly && $payload !== null) {
+            $this->cache->store($token, $payload);
+        }
+
+        return $token;
     }
 
     /**
@@ -65,17 +92,30 @@ class CsrfCacheWrapper
     public function validate(string $token): bool
     {
         $cached = $this->cache->fetch($token);
+
         if ($cached !== null) {
-            return $this->core->validateCached($cached);
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+            $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+            $isMatch =
+                isset($cached['token'], $cached['ip'], $cached['ua'], $cached['iat']) &&
+                $cached['ip'] === $ip &&
+                $cached['ua'] === $ua &&
+                !$this->core->isExpired($cached);
+
+            if ($isMatch) {
+                return true; // ✅ fast path — validated from cache
+            }
         }
 
+        // fallback to core decrypt/validate
         if (!$this->core->validate($token)) {
             return false;
         }
 
         if (!$this->readOnly) {
             $payload = $this->core->getLastPayload();
-            if ($payload) {
+            if ($payload !== null) {
                 $this->cache->store($token, $payload);
             }
         }

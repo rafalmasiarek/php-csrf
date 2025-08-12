@@ -1,12 +1,12 @@
 <?php
 session_start();
-require __DIR__ . '/../../vendor/autoload.php';
 
-use rafalmasiarek\CsrfToken\EncryptedCsrfToken;
+require __DIR__ . '/../_vendor/autoload.php';
 
-$key = hash('sha256', 'your-very-secret-key_kmd6xeWlXWF7', true); // 32 bytes
-$csrf = new EncryptedCsrfToken($key);
+use rafalmasiarek\Csrf\Csrf;
 
+$key = hash('sha256', 'your-very-secret-key_kmd6xeWlXWF7', true);
+$csrf = new Csrf($key);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = $_POST['csrf_token'] ?? '';
@@ -19,6 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = $csrf->generate();
 }
 ?>
+
 <form method="POST">
     <input type="text" name="name" placeholder="Your name" required>
     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($token) ?>">
