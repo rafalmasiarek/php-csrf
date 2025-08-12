@@ -1,6 +1,6 @@
 <?php
 
-namespace rafalmasiarek\CsrfToken\Storage;
+namespace rafalmasiarek\Csrf;
 
 /**
  * FileStorage is a simple file-based implementation of the CsrfStorageInterface.

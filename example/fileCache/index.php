@@ -1,24 +1,26 @@
 <?php
 session_start();
-require __DIR__ . '/../../vendor/autoload.php';
 
-use rafalmasiarek\CsrfToken\EncryptedCsrfToken;
-use rafalmasiarek\CsrfToken\CsrfCacheWrapper;
-use rafalmasiarek\CsrfToken\Storage\FileStorage;
+require __DIR__ . '/../_vendor/autoload.php';
+
+use rafalmasiarek\Csrf\Csrf;
+use rafalmasiarek\Csrf\CsrfCacheWrapper;
+use rafalmasiarek\Csrf\FileStorage;
 
 $key = hash('sha256', 'your-very-secret-key_kmd6xeWlXWF7', true); // 32 bytes
 
-// Ustaw ścieżkę do katalogu cache
+// Ensure the cache directory exists
+// This directory will be used to store CSRF token files.
 $cachePath = __DIR__ . '/tmp/csrf';
 
-// Jeśli katalog nie istnieje — utwórz go
+// Create the cache directory if it does not exist
 if (!is_dir($cachePath)) {
     mkdir($cachePath, 0700, true);
 }
 
-// Inicjalizacja klas
-$csrfCore = new EncryptedCsrfToken($key);
+$csrfCore = new Csrf($key);
 $fileCache = new FileStorage($cachePath);
+
 $csrf = new CsrfCacheWrapper($csrfCore, $fileCache);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -29,10 +31,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     echo '✅ CSRF token valid. Hello, ' . htmlspecialchars($_POST['name']) . '!';
 } else {
-    // UWAGA: generujemy token z klasy bazowej (nie przez wrapper!)
-    $token = $csrfCore->generate();
+    $token = $csrf->generate();
 }
-
 ?>
 
 <form method="POST">

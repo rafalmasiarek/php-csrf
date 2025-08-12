@@ -32,11 +32,11 @@ use CsrfToken\Security\EncryptedCsrfToken;
 Starting from version `1.1.0` and above, the namespace has changed to:
 
 ```php
-use rafalmasiarek\CsrfToken\EncryptedCsrfToken;
+use rafalmasiarek\Csrf\Csrf;
 ```
 
 **Action required:**  
-If you're upgrading from version `1.0.0`, update all references to `EncryptedCsrfToken` in your codebase to use the new namespace.
+If you're upgrading from version `1.0.0`, update all references to `rafalmasiarek\Csrf\Csrf` in your codebase to use the new namespace.
 
 This change was made to follow proper PSR-4 naming conventions and prevent naming conflicts in larger applications or when used as a dependency.
 
