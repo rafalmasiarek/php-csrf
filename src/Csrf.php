@@ -159,8 +159,12 @@ class Csrf
             'iat'   => $state['iat'],
         ];
 
-        if (!$cfg['bind_ip']) $payload['ip'] = '';
-        if (!$cfg['bind_ua']) $payload['ua'] = '';
+        if (!$cfg['bind_ip']) {
+            $payload['ip'] = '';
+        }
+        if (!$cfg['bind_ua']) {
+            $payload['ua'] = '';
+        }
 
         $this->lastPayload = $payload;
 
@@ -178,14 +182,18 @@ class Csrf
      */
     public function validateFor(string $containerId, ?string $encrypted): bool
     {
-        if (!$encrypted) return false;
+        if (!$encrypted) {
+            return false;
+        }
 
         [$bucketKey, $cfg] = $this->resolveContainer($containerId);
 
         $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
         $aad = $this->makeAad($containerId, $cfg['prefix']);
         $payload = $this->decrypt($derivedKey, $encrypted, $aad);
-        if (!$payload) return false;
+        if (!$payload) {
+            return false;
+        }
 
         $this->lastPayload = $payload;
 
@@ -284,7 +292,9 @@ class Csrf
         if (!is_array($state) || !isset($state['iat']) || !is_int($state['iat'])) {
             return null;
         }
-        if ($this->ttl === 0) return PHP_INT_MAX;
+        if ($this->ttl === 0) {
+            return PHP_INT_MAX;
+        }
 
         $elapsed = time() - $state['iat'];
         if ($elapsed >= $this->ttl) {
@@ -342,7 +352,9 @@ class Csrf
         if (!is_array($state) || !isset($state['iat']) || !is_int($state['iat'])) {
             return true;
         }
-        if ($this->ttl === 0) return false;
+        if ($this->ttl === 0) {
+            return false;
+        }
         return (time() - $state['iat']) > $this->ttl;
     }
 
@@ -419,7 +431,9 @@ class Csrf
     private function decrypt(string $key, string $input, string $aad): ?array
     {
         $raw = base64_decode($input, true);
-        if ($raw === false || strlen($raw) < 28) return null;
+        if ($raw === false || strlen($raw) < 28) {
+            return null;
+        }
 
         $iv = substr($raw, 0, 12);
         $tag = substr($raw, 12, 16);
@@ -435,7 +449,9 @@ class Csrf
             $aad
         );
 
-        if ($json === false) return null;
+        if ($json === false) {
+            return null;
+        }
 
         return json_decode($json, true);
     }

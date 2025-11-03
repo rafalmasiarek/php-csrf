@@ -36,7 +36,9 @@ class FileStorage implements CsrfStorageInterface
     public function fetch(string $encryptedToken): ?array
     {
         $path = $this->pathFor($encryptedToken);
-        if (!is_file($path)) return null;
+        if (!is_file($path)) {
+            return null;
+        }
         $json = file_get_contents($path);
         return $json ? json_decode($json, true) : null;
     }
@@ -45,7 +47,9 @@ class FileStorage implements CsrfStorageInterface
     public function remove(string $encryptedToken): void
     {
         $path = $this->pathFor($encryptedToken);
-        if (is_file($path)) @unlink($path);
+        if (is_file($path)) {
+            @unlink($path);
+        }
     }
 
     private function pathFor(string $key): string
