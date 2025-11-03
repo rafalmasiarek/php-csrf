@@ -5,8 +5,8 @@ require __DIR__ . '/../_vendor/autoload.php';
 
 use rafalmasiarek\Csrf\Csrf;
 
-$key = hash('sha256', 'your-very-secret-key_kmd6xeWlXWF7', true);
-$csrf = new Csrf($key);
+$key = random_bytes(32);
+$csrf = new Csrf($key, 900);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = $_POST['csrf_token'] ?? '';
