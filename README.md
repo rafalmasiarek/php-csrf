@@ -78,7 +78,7 @@ $ok = $csrfCached->validateFor('signup', $_POST['_csrf'] ?? '');
 
 ## Migration
 
-### From 1.1.x → 1.2.0
+### From 1.2.x → 132.0
 
 - **What changed**: The library is now **container‑aware**. Internal session storage moved under `$_SESSION['_csrf_v2'][<prefix><container>]` and tokens are bound to container id via AAD and payload.
 - **Backwards compatibility**: Existing calls to `generate()` / `validate()` continue to work for the implicit `"default"` container.
