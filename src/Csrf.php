@@ -44,18 +44,26 @@ class Csrf
      */
     private array $containerOptions = [];
 
+    /** Provides client IP / User-Agent context. */
+    private ClientContextProviderInterface $contextProvider;
+
     /**
      * @param string $cipherKey 32-byte key used for AES-256-GCM encryption.
      * @param int    $ttlSeconds Token TTL (seconds). 0 disables expiration.
+     * @param ClientContextProviderInterface|null $contextProvider Optional client context provider (IP/UA).
      * @throws \InvalidArgumentException If $cipherKey length is not exactly 32 bytes.
      */
-    public function __construct(string $cipherKey, int $ttlSeconds = 900)
-    {
+    public function __construct(
+        string $cipherKey,
+        int $ttlSeconds = 900,
+        ?ClientContextProviderInterface $contextProvider = null
+    ) {
         if (strlen($cipherKey) !== 32) {
             throw new \InvalidArgumentException('Cipher key must be exactly 32 bytes.');
         }
         $this->cipherKey = $cipherKey;
         $this->ttl = $ttlSeconds;
+        $this->contextProvider = $contextProvider ?? new ServerGlobalClientContextProvider();
     }
 
     /**
@@ -85,19 +93,29 @@ class Csrf
 
     /* ===================== Backwards-compatible API (default container) ===================== */
 
-    /** @return string Encrypted token for the default container. */
-    public function generate(): string
+    /**
+     * Generate an encrypted token for the default container.
+     *
+     * @param string|null $ip        Optional client IP override.
+     * @param string|null $userAgent Optional User-Agent override.
+     * @return string Encrypted token for the default container.
+     */
+    public function generate(?string $ip = null, ?string $userAgent = null): string
     {
-        return $this->generateFor('default');
+        return $this->generateFor('default', $ip, $userAgent);
     }
 
     /**
+     * Validate an encrypted token for the default container.
+     *
      * @param string|null $encrypted Encrypted token.
+     * @param string|null $ip        Optional client IP override.
+     * @param string|null $userAgent Optional User-Agent override.
      * @return bool True if valid for the default container.
      */
-    public function validate(?string $encrypted): bool
+    public function validate(?string $encrypted, ?string $ip = null, ?string $userAgent = null): bool
     {
-        return $this->validateFor('default', $encrypted);
+        return $this->validateFor('default', $encrypted, $ip, $userAgent);
     }
 
     /** @return string New encrypted token for the default container. */
@@ -132,10 +150,12 @@ class Csrf
     /**
      * Generate (or reuse unexpired) token for a container.
      *
-     * @param string $containerId Container identifier.
+     * @param string      $containerId Container identifier.
+     * @param string|null $ip          Optional client IP override.
+     * @param string|null $userAgent   Optional User-Agent override.
      * @return string Encrypted token.
      */
-    public function generateFor(string $containerId): string
+    public function generateFor(string $containerId, ?string $ip = null, ?string $userAgent = null): string
     {
         [$bucketKey, $cfg] = $this->resolveContainer($containerId);
 
@@ -151,20 +171,16 @@ class Csrf
             $_SESSION[$this->sessionRoot][$bucketKey] = $state;
         }
 
+        $resolvedIp = $this->resolveIp($ip);
+        $resolvedUa = $this->resolveUserAgent($userAgent);
+
         $payload = [
             'cid'   => $containerId,
             'token' => $state['token'],
-            'ip'    => $_SERVER['REMOTE_ADDR'] ?? '',
-            'ua'    => $_SERVER['HTTP_USER_AGENT'] ?? '',
+            'ip'    => $cfg['bind_ip'] ? $resolvedIp : '',
+            'ua'    => $cfg['bind_ua'] ? $resolvedUa : '',
             'iat'   => $state['iat'],
         ];
-
-        if (!$cfg['bind_ip']) {
-            $payload['ip'] = '';
-        }
-        if (!$cfg['bind_ua']) {
-            $payload['ua'] = '';
-        }
 
         $this->lastPayload = $payload;
 
@@ -178,10 +194,16 @@ class Csrf
      *
      * @param string      $containerId Container identifier.
      * @param string|null $encrypted   Encrypted token to validate.
+     * @param string|null $ip          Optional client IP override.
+     * @param string|null $userAgent   Optional User-Agent override.
      * @return bool True on success, false otherwise.
      */
-    public function validateFor(string $containerId, ?string $encrypted): bool
-    {
+    public function validateFor(
+        string $containerId,
+        ?string $encrypted,
+        ?string $ip = null,
+        ?string $userAgent = null
+    ): bool {
         if (!$encrypted) {
             return false;
         }
@@ -206,8 +228,8 @@ class Csrf
             return false;
         }
 
-        $reqIp = $_SERVER['REMOTE_ADDR'] ?? '';
-        $reqUa = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        $reqIp = $this->resolveIp($ip);
+        $reqUa = $this->resolveUserAgent($userAgent);
         $expIp = $cfg['bind_ip'] ? $reqIp : '';
         $expUa = $cfg['bind_ua'] ? $reqUa : '';
 
@@ -230,12 +252,18 @@ class Csrf
     /**
      * Validate a cached payload for a specific container (no decrypt).
      *
-     * @param string $containerId Container identifier.
-     * @param array  $payload     Cached payload to check.
+     * @param string      $containerId Container identifier.
+     * @param array       $payload     Cached payload to check.
+     * @param string|null $ip          Optional client IP override.
+     * @param string|null $userAgent   Optional User-Agent override.
      * @return bool True if matches session and not expired.
      */
-    public function validateCachedFor(string $containerId, array $payload): bool
-    {
+    public function validateCachedFor(
+        string $containerId,
+        array $payload,
+        ?string $ip = null,
+        ?string $userAgent = null
+    ): bool {
         [$bucketKey, $cfg] = $this->resolveContainer($containerId);
         $this->lastPayload = $payload;
 
@@ -244,8 +272,8 @@ class Csrf
             return false;
         }
 
-        $reqIp = $_SERVER['REMOTE_ADDR'] ?? '';
-        $reqUa = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        $reqIp = $this->resolveIp($ip);
+        $reqUa = $this->resolveUserAgent($userAgent);
         $expIp = $cfg['bind_ip'] ? $reqIp : '';
         $expUa = $cfg['bind_ua'] ? $reqUa : '';
 
@@ -356,6 +384,34 @@ class Csrf
             return false;
         }
         return (time() - $state['iat']) > $this->ttl;
+    }
+
+    /**
+     * Resolve IP address using explicit override or context provider.
+     *
+     * @param string|null $override Explicit IP passed by caller (optional).
+     * @return string Resolved IP address.
+     */
+    private function resolveIp(?string $override): string
+    {
+        if ($override !== null && $override !== '') {
+            return $override;
+        }
+        return $this->contextProvider->getIp();
+    }
+
+    /**
+     * Resolve User-Agent using explicit override or context provider.
+     *
+     * @param string|null $override Explicit User-Agent passed by caller (optional).
+     * @return string Resolved User-Agent.
+     */
+    private function resolveUserAgent(?string $override): string
+    {
+        if ($override !== null && $override !== '') {
+            return $override;
+        }
+        return $this->contextProvider->getUserAgent();
     }
 
     /**
