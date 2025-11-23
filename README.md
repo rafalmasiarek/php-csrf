@@ -76,9 +76,55 @@ $ok = $csrfCached->validateFor('signup', $_POST['_csrf'] ?? '');
 - Set a **reasonable TTL**. `0` (no expiry) is supported but not recommended.
 - Tokens are **burned after successful validation** (per container).
 
+---
+
+## Client Context Provider (IP / User-Agent injection)
+
+Since version **1.3.2** the library supports **external injection of client IP and User-Agent**, instead of relying solely on `$_SERVER`.
+
+### Passing IP/UA explicitly
+
+```php
+$token = $csrf->generate($realIp, $realUa);
+$isValid = $csrf->validate($submittedToken, $realIp, $realUa);
+```
+
+Container-specific:
+
+```php
+$token = $csrf->generateFor('signup', $realIp, $realUa);
+$ok = $csrf->validateFor('signup', $submittedToken, $realIp, $realUa);
+```
+
+### ClientContextProviderInterface
+
+```php
+use rafalmasiarek\Csrf\ClientContextProviderInterface;
+
+class SlimRequestProvider implements ClientContextProviderInterface {
+    public function __construct(private \Psr\Http\Message\ServerRequestInterface $request) {}
+
+    public function getIp(): string {
+        return $this->request->getAttribute('client_ip') ?? '';
+    }
+
+    public function getUserAgent(): string {
+        return $this->request->getHeaderLine('User-Agent');
+    }
+}
+```
+
+Usage:
+
+```php
+$csrf = new Csrf($key, 900, new SlimRequestProvider($request));
+```
+
+---
+
 ## Migration
 
-### From 1.2.x → 132.0
+### From 1.2.1 → 1.3.x
 
 - **What changed**: The library is now **container‑aware**. Internal session storage moved under `$_SESSION['_csrf_v2'][<prefix><container>]` and tokens are bound to container id via AAD and payload.
 - **Backwards compatibility**: Existing calls to `generate()` / `validate()` continue to work for the implicit `"default"` container.
