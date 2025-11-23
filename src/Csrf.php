@@ -511,4 +511,149 @@ class Csrf
 
         return json_decode($json, true);
     }
+
+    /**
+     * Debug variant of container-aware validation.
+     *
+     * - Works for any container id (including "default").
+     * - Does NOT clear the token on success.
+     * - Never throws; always returns a detailed diagnostic array.
+     *
+     * Usage:
+     *   $debug = $csrf->debugValidate($token);                          // default container
+     *   $debug = $csrf->debugValidate($token, 'contactform_main');      // custom container
+     *   $debug = $csrf->debugValidate($token, 'signup', $ip, $userAgent);
+     *
+     * Return structure:
+     *  - ok          (bool)   : final validation result
+     *  - reason      (?string): high-level reason (ok, missing_token, decrypt_failed, ...)
+     *  - containerId (string) : container id used
+     *  - input       (array)  : raw input info (encrypted_present, ip_param, ua_param)
+     *  - steps       (array)  : list of completed steps
+     *  - config      (array)  : effective container config (bind_ip, bind_ua, prefix, bucketKey, pepper_set)
+     *  - payload_raw (array)  : decrypted payload (if decrypt succeeded)
+     *  - state       (array)  : session state (token, iat) if present
+     *  - expected    (array)  : expected token/ip/ua derived from state and config
+     *  - actual      (array)  : actual token/ip/ua from payload
+     *  - mismatch    (array)  : per-field match flags (only on payload_mismatch)
+     *  - details     (array)  : extra details for some reasons (e.g. expired, container_mismatch)
+     */
+    public function debugValidate(
+        ?string $encrypted,
+        ?string $containerId = 'default',
+        ?string $ip = null,
+        ?string $userAgent = null
+    ): array {
+        $containerId = $containerId ?: 'default';
+
+        $debug = [
+            'ok'          => false,
+            'reason'      => null,
+            'containerId' => $containerId,
+            'input'       => [
+                'encrypted_present' => $encrypted !== null && $encrypted !== '',
+                'ip_param'          => $ip,
+                'ua_param'          => $userAgent,
+            ],
+            'steps'       => [],
+        ];
+
+        if (!$encrypted) {
+            $debug['reason'] = 'missing_token';
+            return $debug;
+        }
+
+        $debug['steps'][] = 'token_present';
+
+        [$bucketKey, $cfg] = $this->resolveContainer($containerId);
+        $debug['config'] = [
+            'bucketKey'  => $bucketKey,
+            'bind_ip'    => $cfg['bind_ip'],
+            'bind_ua'    => $cfg['bind_ua'],
+            'prefix'     => $cfg['prefix'],
+            'pepper_set' => $cfg['pepper'] !== null,
+        ];
+
+        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
+        $aad        = $this->makeAad($containerId, $cfg['prefix']);
+        $payload    = $this->decrypt($derivedKey, $encrypted, $aad);
+
+        if (!$payload) {
+            $debug['reason'] = 'decrypt_failed';
+            return $debug;
+        }
+
+        $debug['steps'][]     = 'decrypt_ok';
+        $debug['payload_raw'] = $payload;
+
+        $this->lastPayload = $payload;
+
+        if (($payload['cid'] ?? null) !== $containerId) {
+            $debug['reason'] = 'container_mismatch';
+            $debug['details'] = [
+                'payload_cid' => $payload['cid'] ?? null,
+            ];
+            return $debug;
+        }
+
+        $debug['steps'][] = 'container_match';
+
+        $state = $_SESSION[$this->sessionRoot][$bucketKey] ?? null;
+        if (!is_array($state) || !isset($state['token'], $state['iat'])) {
+            $debug['reason'] = 'missing_session_state';
+            $debug['details'] = [
+                'state' => $state,
+            ];
+            return $debug;
+        }
+
+        $debug['steps'][] = 'session_state_present';
+        $debug['state']   = $state;
+
+        $reqIp = $this->resolveIp($ip);
+        $reqUa = $this->resolveUserAgent($userAgent);
+        $expIp = $cfg['bind_ip'] ? $reqIp : '';
+        $expUa = $cfg['bind_ua'] ? $reqUa : '';
+
+        $debug['expected'] = [
+            'token' => $state['token'],
+            'ip'    => $expIp,
+            'ua'    => $expUa,
+        ];
+        $debug['actual'] = [
+            'token' => $payload['token'] ?? null,
+            'ip'    => $payload['ip'] ?? null,
+            'ua'    => $payload['ua'] ?? null,
+        ];
+
+        if (
+            ($payload['token'] ?? null) !== $state['token'] ||
+            ($payload['ip'] ?? '') !== $expIp ||
+            ($payload['ua'] ?? '') !== $expUa
+        ) {
+            $debug['reason'] = 'payload_mismatch';
+            $debug['mismatch'] = [
+                'token_match' => ($payload['token'] ?? null) === $state['token'],
+                'ip_match'    => ($payload['ip'] ?? '') === $expIp,
+                'ua_match'    => ($payload['ua'] ?? '') === $expUa,
+            ];
+            return $debug;
+        }
+
+        if ($this->isExpired($state)) {
+            $debug['reason']  = 'expired';
+            $debug['details'] = [
+                'iat' => $state['iat'] ?? null,
+                'now' => time(),
+                'ttl' => $this->ttl,
+            ];
+            return $debug;
+        }
+
+        // IMPORTANT: do NOT clear the token here – this is debug-only.
+        $debug['ok']     = true;
+        $debug['reason'] = 'ok';
+
+        return $debug;
+    }
 }
