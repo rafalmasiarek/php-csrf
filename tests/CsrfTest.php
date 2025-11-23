@@ -49,15 +49,13 @@ final class CsrfTest extends TestCase
     public function testCustomClientContextProviderIsUsed(): void
     {
         $provider = new class implements ClientContextProviderInterface {
-            public function getUserIp(): string
+            public function getIp(): string
             {
-                // Custom, "wymuszone" IP
                 return '203.0.113.10';
             }
 
             public function getUserAgent(): string
             {
-                // Custom, "wymuszony" User-Agent
                 return 'custom-test-agent/1.0';
             }
         };
