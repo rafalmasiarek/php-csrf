@@ -139,12 +139,9 @@ $csrf = new Csrf($key, 900, new SlimRequestProvider($request));
 See [`example/`](example/) for drop‑in snippets:
 - `basic/index.php`
 - `containers/index.php`
+- `fileCache/index.php`
+- `ipOverride/index.php`
 - `mysql/schema.sql`
-
-## License
-
-MIT
-
 
 ## View Helpers
 
@@ -186,3 +183,7 @@ CsrfBlade::register($this->app->make(BladeCompiler::class), app(Csrf::class));
 
 // In Blade: @csrfField('signup')
 ```
+
+## License
+
+MIT
