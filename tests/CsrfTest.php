@@ -60,8 +60,6 @@ final class CsrfTest extends TestCase
             }
         };
 
-        // Ustawiamy inne wartości w $_SERVER,
-        // żeby upewnić się, że Csrf korzysta z providera, a nie bezpośrednio z $_SERVER.
         $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
         $_SERVER['HTTP_USER_AGENT'] = 'phpunit/1.0';
 
@@ -69,12 +67,24 @@ final class CsrfTest extends TestCase
 
         $token = $csrf->generate();
         $this->assertIsString($token);
-        $this->assertTrue($csrf->validate($token));
 
+        $this->assertTrue(
+            $csrf->validate(
+                $token,
+                $provider->getIp(),
+                $provider->getUserAgent()
+            )
+        );
 
         $_SERVER['REMOTE_ADDR'] = '10.0.0.1';
         $_SERVER['HTTP_USER_AGENT'] = 'different/ua';
 
-        $this->assertTrue($csrf->validate($token));
+        $this->assertTrue(
+            $csrf->validate(
+                $token,
+                $provider->getIp(),
+                $provider->getUserAgent()
+            )
+        );
     }
 }
