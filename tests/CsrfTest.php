@@ -1,8 +1,10 @@
 <?php
+
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 use rafalmasiarek\Csrf\Csrf;
+use rafalmasiarek\Csrf\ClientContextProviderInterface;
 
 final class CsrfTest extends TestCase
 {
@@ -42,5 +44,39 @@ final class CsrfTest extends TestCase
         $token = $csrf->generate();
         sleep(2);
         $this->assertFalse($csrf->validate($token));
+    }
+
+    public function testCustomClientContextProviderIsUsed(): void
+    {
+        $provider = new class implements ClientContextProviderInterface {
+            public function getUserIp(): string
+            {
+                // Custom, "wymuszone" IP
+                return '203.0.113.10';
+            }
+
+            public function getUserAgent(): string
+            {
+                // Custom, "wymuszony" User-Agent
+                return 'custom-test-agent/1.0';
+            }
+        };
+
+        // Ustawiamy inne wartości w $_SERVER,
+        // żeby upewnić się, że Csrf korzysta z providera, a nie bezpośrednio z $_SERVER.
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+        $_SERVER['HTTP_USER_AGENT'] = 'phpunit/1.0';
+
+        $csrf = new Csrf(str_repeat('E', 32), 900, $provider);
+
+        $token = $csrf->generate();
+        $this->assertIsString($token);
+        $this->assertTrue($csrf->validate($token));
+
+
+        $_SERVER['REMOTE_ADDR'] = '10.0.0.1';
+        $_SERVER['HTTP_USER_AGENT'] = 'different/ua';
+
+        $this->assertTrue($csrf->validate($token));
     }
 }
