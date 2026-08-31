@@ -15,6 +15,9 @@ namespace rafalmasiarek\Csrf;
  *  - Each container has its own session bucket, derived key (HKDF), optional pepper,
  *    and AES-GCM Additional Authenticated Data (AAD) binding.
  *  - Token payload binds to container id (cid), IP (optional), UA (optional), and iat.
+ *  - Optional per-container origin-scope: allowed_origins whitelist checked on validation.
+ *    When the context provider also implements OriginProviderInterface the origin is
+ *    resolved automatically; pass an explicit $origin override to validateFor() otherwise.
  */
 class Csrf
 {
@@ -36,11 +39,13 @@ class Csrf
     /**
      * Per-container runtime options.
      * Keys are container IDs, values are option arrays:
-     *  - prefix  (string) : prefix added to session bucket key
-     *  - bind_ip (bool)   : verify client IP (default: true)
-     *  - bind_ua (bool)   : verify User-Agent (default: true)
-     *  - pepper  (?string): optional per-container binary secret for HKDF salt
-     * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string}>
+     *  - prefix          (string)        : prefix added to session bucket key
+     *  - bind_ip         (bool)          : verify client IP (default: true)
+     *  - bind_ua         (bool)          : verify User-Agent (default: true)
+     *  - pepper          (?string)       : optional per-container binary secret for HKDF salt
+     *  - allowed_origins (list<string>)  : origin whitelist; empty = no restriction
+     *  - origin_mode     (string)        : 'lenient' (null origin passes) | 'strict' (null origin blocked)
+     * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string}>
      */
     private array $containerOptions = [];
 
@@ -76,10 +81,12 @@ class Csrf
     public function withContainer(string $containerId, array $options): self
     {
         $defaults = [
-            'prefix'  => '',
-            'bind_ip' => true,
-            'bind_ua' => true,
-            'pepper'  => null,
+            'prefix'          => '',
+            'bind_ip'         => true,
+            'bind_ua'         => true,
+            'pepper'          => null,
+            'allowed_origins' => [],
+            'origin_mode'     => 'lenient',
         ];
         $this->containerOptions[$containerId] = array_replace($defaults, $options);
         return $this;
@@ -196,19 +203,26 @@ class Csrf
      * @param string|null $encrypted   Encrypted token to validate.
      * @param string|null $ip          Optional client IP override.
      * @param string|null $userAgent   Optional User-Agent override.
+     * @param string|null $origin      Optional HTTP Origin override. When null, resolved
+     *                                 automatically via OriginProviderInterface if available.
      * @return bool True on success, false otherwise.
      */
     public function validateFor(
         string $containerId,
         ?string $encrypted,
         ?string $ip = null,
-        ?string $userAgent = null
+        ?string $userAgent = null,
+        ?string $origin = null
     ): bool {
         if (!$encrypted) {
             return false;
         }
 
         [$bucketKey, $cfg] = $this->resolveContainer($containerId);
+
+        if (!$this->checkOrigin($cfg, $origin)) {
+            return false;
+        }
 
         $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
         $aad = $this->makeAad($containerId, $cfg['prefix']);
@@ -262,9 +276,15 @@ class Csrf
         string $containerId,
         array $payload,
         ?string $ip = null,
-        ?string $userAgent = null
+        ?string $userAgent = null,
+        ?string $origin = null
     ): bool {
         [$bucketKey, $cfg] = $this->resolveContainer($containerId);
+
+        if (!$this->checkOrigin($cfg, $origin)) {
+            return false;
+        }
+
         $this->lastPayload = $payload;
 
         $state = $_SESSION[$this->sessionRoot][$bucketKey] ?? null;
@@ -354,10 +374,12 @@ class Csrf
     private function resolveContainer(string $containerId): array
     {
         $defaults = [
-            'prefix'  => '',
-            'bind_ip' => true,
-            'bind_ua' => true,
-            'pepper'  => null,
+            'prefix'          => '',
+            'bind_ip'         => true,
+            'bind_ua'         => true,
+            'pepper'          => null,
+            'allowed_origins' => [],
+            'origin_mode'     => 'lenient',
         ];
         $cfg = $this->containerOptions[$containerId] ?? $defaults;
         $bucketKey = ($cfg['prefix'] !== '' ? $cfg['prefix'] : '') . $containerId;
@@ -412,6 +434,48 @@ class Csrf
             return $override;
         }
         return $this->contextProvider->getUserAgent();
+    }
+
+    /**
+     * Resolves the HTTP Origin for origin-scope validation.
+     *
+     * Uses the explicit $override when provided; falls back to the context
+     * provider when it implements OriginProviderInterface; returns null otherwise.
+     *
+     * @param string|null $override Explicit origin passed by the caller.
+     *
+     * @return string|null Resolved origin or null.
+     */
+    private function resolveOrigin(?string $override): ?string
+    {
+        if ($override !== null) {
+            return $override;
+        }
+        if ($this->contextProvider instanceof OriginProviderInterface) {
+            return $this->contextProvider->getOrigin();
+        }
+        return null;
+    }
+
+    /**
+     * Checks the resolved origin against the container's allowed_origins list.
+     *
+     * Returns true immediately when allowed_origins is empty (no restriction).
+     *
+     * @param array       $cfg    Resolved container configuration.
+     * @param string|null $origin Explicit origin override (null = auto-resolve).
+     *
+     * @return bool True when origin is permitted.
+     */
+    private function checkOrigin(array $cfg, ?string $origin): bool
+    {
+        $patterns = (array) ($cfg['allowed_origins'] ?? []);
+        if ($patterns === []) {
+            return true;
+        }
+        $mode     = (string) ($cfg['origin_mode'] ?? 'lenient');
+        $resolved = $this->resolveOrigin($origin);
+        return OriginMatcher::matches($resolved, $patterns, $mode);
     }
 
     /**
@@ -542,7 +606,8 @@ class Csrf
         ?string $encrypted,
         ?string $containerId = 'default',
         ?string $ip = null,
-        ?string $userAgent = null
+        ?string $userAgent = null,
+        ?string $origin = null
     ): array {
         $containerId = $containerId ?: 'default';
 
@@ -554,6 +619,7 @@ class Csrf
                 'encrypted_present' => $encrypted !== null && $encrypted !== '',
                 'ip_param'          => $ip,
                 'ua_param'          => $userAgent,
+                'origin_param'      => $origin,
             ],
             'steps'       => [],
         ];
@@ -567,12 +633,31 @@ class Csrf
 
         [$bucketKey, $cfg] = $this->resolveContainer($containerId);
         $debug['config'] = [
-            'bucketKey'  => $bucketKey,
-            'bind_ip'    => $cfg['bind_ip'],
-            'bind_ua'    => $cfg['bind_ua'],
-            'prefix'     => $cfg['prefix'],
-            'pepper_set' => $cfg['pepper'] !== null,
+            'bucketKey'       => $bucketKey,
+            'bind_ip'         => $cfg['bind_ip'],
+            'bind_ua'         => $cfg['bind_ua'],
+            'prefix'          => $cfg['prefix'],
+            'pepper_set'      => $cfg['pepper'] !== null,
+            'allowed_origins' => $cfg['allowed_origins'],
+            'origin_mode'     => $cfg['origin_mode'],
         ];
+
+        $allowedOrigins = (array) ($cfg['allowed_origins'] ?? []);
+        if ($allowedOrigins !== []) {
+            $resolvedOrigin = $this->resolveOrigin($origin);
+            $originMode     = (string) ($cfg['origin_mode'] ?? 'lenient');
+            $originOk       = OriginMatcher::matches($resolvedOrigin, $allowedOrigins, $originMode);
+            $debug['origin'] = [
+                'resolved' => $resolvedOrigin,
+                'mode'     => $originMode,
+                'allowed'  => $originOk,
+            ];
+            if (!$originOk) {
+                $debug['reason'] = 'origin_rejected';
+                return $debug;
+            }
+            $debug['steps'][] = 'origin_ok';
+        }
 
         $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
         $aad        = $this->makeAad($containerId, $cfg['prefix']);
