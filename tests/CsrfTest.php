@@ -5,6 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 use rafalmasiarek\Csrf\Csrf;
 use rafalmasiarek\Csrf\ClientContextProviderInterface;
+use rafalmasiarek\Csrf\OriginMatcher;
 
 final class CsrfTest extends TestCase
 {
@@ -74,5 +75,197 @@ final class CsrfTest extends TestCase
         $_SERVER['HTTP_USER_AGENT'] = 'different/ua';
 
         $this->assertFalse($csrf->validate($token));
+    }
+
+    /* ===================== OriginMatcher unit tests ===================== */
+
+    /**
+     * Exact full-origin match (scheme + host) passes when origin matches the pattern.
+     */
+    public function testOriginMatcherExactWithScheme(): void
+    {
+        $this->assertTrue(OriginMatcher::matches('https://example.com', ['https://example.com']));
+    }
+
+    /**
+     * Scheme mismatch is rejected when the pattern includes a scheme.
+     */
+    public function testOriginMatcherExactSchemeMismatchRejected(): void
+    {
+        $this->assertFalse(OriginMatcher::matches('http://example.com', ['https://example.com']));
+    }
+
+    /**
+     * Scheme-free pattern accepts any scheme.
+     */
+    public function testOriginMatcherSchemeFreePasses(): void
+    {
+        $this->assertTrue(OriginMatcher::matches('https://example.com', ['example.com']));
+        $this->assertTrue(OriginMatcher::matches('http://example.com', ['example.com']));
+    }
+
+    /**
+     * Wildcard matches exactly one subdomain label.
+     */
+    public function testOriginMatcherWildcardSingleLabel(): void
+    {
+        $this->assertTrue(OriginMatcher::matches('https://www.example.com', ['*.example.com']));
+        $this->assertFalse(
+            OriginMatcher::matches('https://a.b.example.com', ['*.example.com']),
+            'Wildcard must not span multiple labels'
+        );
+    }
+
+    /**
+     * Empty patterns list permits all origins.
+     */
+    public function testOriginMatcherEmptyPatternsPermitsAll(): void
+    {
+        $this->assertTrue(OriginMatcher::matches(null, []));
+        $this->assertTrue(OriginMatcher::matches('https://anywhere.example.com', []));
+    }
+
+    /**
+     * Strict mode rejects null origin.
+     */
+    public function testOriginMatcherStrictBlocksNullOrigin(): void
+    {
+        $this->assertFalse(OriginMatcher::matches(null, ['https://example.com'], 'strict'));
+    }
+
+    /**
+     * Lenient mode (default) accepts null origin.
+     */
+    public function testOriginMatcherLenientAllowsNullOrigin(): void
+    {
+        $this->assertTrue(OriginMatcher::matches(null, ['https://example.com'], 'lenient'));
+        $this->assertTrue(OriginMatcher::matches(null, ['https://example.com']));
+    }
+
+    /* ===================== Csrf origin-scope integration tests ===================== */
+
+    /**
+     * Token validates when the passed origin matches the container whitelist.
+     */
+    public function testOriginScopeAllowsMatchingOrigin(): void
+    {
+        $csrf = (new Csrf(str_repeat('F', 32), 900))
+            ->withContainer('guarded', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['https://example.com'],
+            ]);
+
+        $token = $csrf->generateFor('guarded');
+        $this->assertTrue($csrf->validateFor('guarded', $token, null, null, 'https://example.com'));
+    }
+
+    /**
+     * Token is rejected when the passed origin does not match the container whitelist.
+     */
+    public function testOriginScopeBlocksNonMatchingOrigin(): void
+    {
+        $csrf = (new Csrf(str_repeat('G', 32), 900))
+            ->withContainer('guarded', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['https://example.com'],
+            ]);
+
+        $token = $csrf->generateFor('guarded');
+        $this->assertFalse($csrf->validateFor('guarded', $token, null, null, 'https://attacker.example.org'));
+    }
+
+    /**
+     * Empty allowed_origins list imposes no restriction — null origin passes.
+     */
+    public function testOriginScopeEmptyListPermitsAll(): void
+    {
+        $csrf = (new Csrf(str_repeat('H', 32), 900))
+            ->withContainer('open', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => [],
+            ]);
+
+        $token = $csrf->generateFor('open');
+        $this->assertTrue($csrf->validateFor('open', $token, null, null, null));
+    }
+
+    /**
+     * Strict origin mode rejects validation when no origin can be resolved.
+     */
+    public function testOriginScopeStrictBlocksNullOrigin(): void
+    {
+        unset($_SERVER['HTTP_ORIGIN'], $_SERVER['HTTP_REFERER']);
+
+        $csrf = (new Csrf(str_repeat('I', 32), 900))
+            ->withContainer('strict', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['https://example.com'],
+                'origin_mode'     => 'strict',
+            ]);
+
+        $token = $csrf->generateFor('strict');
+        $this->assertFalse($csrf->validateFor('strict', $token, null, null, null));
+    }
+
+    /**
+     * Lenient origin mode (default) passes validation when no origin can be resolved.
+     */
+    public function testOriginScopeLenientAllowsNullOrigin(): void
+    {
+        unset($_SERVER['HTTP_ORIGIN'], $_SERVER['HTTP_REFERER']);
+
+        $csrf = (new Csrf(str_repeat('J', 32), 900))
+            ->withContainer('lenient', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['https://example.com'],
+                'origin_mode'     => 'lenient',
+            ]);
+
+        $token = $csrf->generateFor('lenient');
+        $this->assertTrue($csrf->validateFor('lenient', $token, null, null, null));
+    }
+
+    /**
+     * Origin is resolved automatically from $_SERVER when no explicit override is passed.
+     */
+    public function testOriginScopeAutoResolvedFromServer(): void
+    {
+        $_SERVER['HTTP_ORIGIN'] = 'https://example.com';
+
+        $csrf = (new Csrf(str_repeat('K', 32), 900))
+            ->withContainer('auto', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['https://example.com'],
+            ]);
+
+        $token = $csrf->generateFor('auto');
+        $this->assertTrue($csrf->validateFor('auto', $token));
+
+        unset($_SERVER['HTTP_ORIGIN']);
+    }
+
+    /**
+     * Wildcard pattern in allowed_origins matches a single subdomain.
+     */
+    public function testOriginScopeWildcardSubdomain(): void
+    {
+        $csrf = (new Csrf(str_repeat('L', 32), 900))
+            ->withContainer('wildcard', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['*.example.com'],
+            ]);
+
+        $token = $csrf->generateFor('wildcard');
+        $this->assertTrue($csrf->validateFor('wildcard', $token, null, null, 'https://api.example.com'));
+
+        $token = $csrf->regenerateFor('wildcard');
+        $this->assertFalse($csrf->validateFor('wildcard', $token, null, null, 'https://a.b.example.com'));
     }
 }
