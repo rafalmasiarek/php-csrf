@@ -1,8 +1,14 @@
+# Added from shared-config: files/common/.github/dependabot.yml.tpl
+
 version: 2
 updates:
-  - package-ecosystem: "composer"
+  - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"    # daily | weekly | monthly
+      interval: "monthly"
     open-pull-requests-limit: 5
-
+    labels:
+        - "dependencies"
+        - "github-actions"
+    commit-message:
+      prefix: "chore(deps)"
