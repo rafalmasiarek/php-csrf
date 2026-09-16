@@ -3,7 +3,7 @@
   "description": "Encrypted CSRF token library with fingerprint and caching (file, MySQL, Redis)",
   "type": "library",
   "require": {
-    "php": ">=7.4"
+    "php": ">=8.2"
   },
   "autoload": {
     "psr-4": {

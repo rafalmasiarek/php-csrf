@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace rafalmasiarek\Csrf;
 
 /**
- * Provides the HTTP Origin for CSRF origin-scope validation.
+ * Provides the HTTP Origin for CSRF origin-scope validation and origin binding.
  *
- * Implement this interface alongside ClientContextProviderInterface to enable
- * per-container allowed_origins checks in Csrf::validateFor().
- * ServerGlobalClientContextProvider implements both interfaces by default.
+ * Pass an implementation as the 5th constructor argument to Csrf to enable
+ * automatic origin resolution for allowed_origins checks and 'origin' binding
+ * in Csrf::validateFor(). ServerGlobalClientContextProvider implements this
+ * interface (alongside ClientContextProviderInterface) and is used by default.
  *
  * @package rafalmasiarek\Csrf
  */

@@ -19,6 +19,12 @@ final class HtmlHelper
      * to validate against. Without it, the middleware falls back to the
      * "default" container and validation always fails for named containers.
      *
+     * Transparently issues the token together with its _csrf_proof (see
+     * Csrf::issueFor()) and emits a third hidden input (_csrf_proof) whenever
+     * a proof is available (i.e. a session is active). No template changes
+     * are required to start benefiting from it; it has no effect on
+     * validation unless the receiving container sets 'require_proof'.
+     *
      * @param Csrf   $csrf
      * @param string $containerId Container name (default: "default").
      * @param string $inputName   Input field name for the token (default: "_csrf").
@@ -26,8 +32,8 @@ final class HtmlHelper
      */
     public static function input(Csrf $csrf, string $containerId = 'default', string $inputName = '_csrf'): string
     {
-        $token = $csrf->generateFor($containerId);
-        $value = htmlspecialchars($token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $pair  = $csrf->issueFor($containerId);
+        $value = htmlspecialchars($pair->token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $name  = htmlspecialchars($inputName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         $field = sprintf('<input type="hidden" name="%s" value="%s">', $name, $value);
@@ -37,6 +43,25 @@ final class HtmlHelper
             $field .= sprintf('<input type="hidden" name="_csrf_container" value="%s">', $safeId);
         }
 
+        if ($pair->proof !== null) {
+            $safeProof = htmlspecialchars($pair->proof, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $field .= sprintf('<input type="hidden" name="_csrf_proof" value="%s">', $safeProof);
+        }
+
         return $field;
+    }
+
+    /**
+     * Returns the raw encrypted CSRF token value for a container, without
+     * wrapping it in an HTML input (e.g. for embedding in a <meta> tag or
+     * passing to client-side JavaScript). Does not compute or expose a proof.
+     *
+     * @param Csrf   $csrf
+     * @param string $containerId Container name (default: "default").
+     * @return string Encrypted token value (not HTML-escaped).
+     */
+    public static function token(Csrf $csrf, string $containerId = 'default'): string
+    {
+        return $csrf->generateFor($containerId);
     }
 }
