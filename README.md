@@ -350,7 +350,8 @@ library's model — `single_use` is not configurable, by design.
 
 ### Upgrading to this release (Origin Binding, Session-Bound Proof)
 
-- **PHP requirement raised to `>=8.1`** (`CsrfPair` uses readonly properties). This is a
+- **PHP requirement raised to `>=8.2`** (`CsrfPair` is a `readonly` class — the class-level
+  `readonly` modifier is PHP 8.2+; readonly *properties* alone would only need 8.1). This is a
   breaking change for consumers on PHP 7.4–8.0 — bump your own `composer.json` accordingly.
 - **`Csrf::__construct()`** gained an optional 4th parameter, `?SessionBindingProviderInterface`.
   Existing call sites are unaffected.
