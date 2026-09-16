@@ -96,13 +96,46 @@ class CsrfCacheWrapper
     }
 
     /**
-     * Validate with cache fast-path for container.
+     * Issue a token/proof pair and cache the token's payload, for container.
      *
      * @param string $containerId
-     * @param string $token
+     * @return CsrfPair
+     */
+    public function issueFor(string $containerId): CsrfPair
+    {
+        $pair     = $this->core->issueFor($containerId);
+        $payload  = $this->core->getLastPayload();
+        $cacheKey = $this->composeKey($containerId, $pair->token);
+
+        $stored = false;
+
+        if (!$this->readOnly && $payload !== null) {
+            $this->cache->store($cacheKey, $payload);
+            $stored = true;
+        }
+
+        $this->lastCacheDebug = [
+            'op'          => 'issue',
+            'container'   => $containerId,
+            'cache_key'   => $cacheKey,
+            'stored'      => $stored,
+            'read_only'   => $this->readOnly,
+            'has_payload' => $payload !== null,
+            'has_proof'   => $pair->proof !== null,
+        ];
+
+        return $pair;
+    }
+
+    /**
+     * Validate with cache fast-path for container.
+     *
+     * @param string      $containerId
+     * @param string      $token
+     * @param string|null $proof Submitted _csrf_proof value (see Csrf::validateFor()).
      * @return bool
      */
-    public function validateFor(string $containerId, string $token): bool
+    public function validateFor(string $containerId, string $token, ?string $proof = null): bool
     {
         $cacheKey = $this->composeKey($containerId, $token);
 
@@ -125,7 +158,7 @@ class CsrfCacheWrapper
             // Fast-path: let Csrf validate the cached payload (IP/UA/TTL/etc.),
             // without decrypting the token again.
             try {
-                $fastOk = $this->core->validateCachedFor($containerId, $cached);
+                $fastOk = $this->core->validateCachedFor($containerId, $cached, null, null, null, $token, $proof);
             } catch (\Throwable $e) {
                 $fastOk = false;
                 $debug['error'] = 'validateCachedFor_exception';
@@ -140,7 +173,7 @@ class CsrfCacheWrapper
         }
 
         // Cache miss or cached payload no longer valid – fallback to full validation.
-        if (!$this->core->validateFor($containerId, $token)) {
+        if (!$this->core->validateFor($containerId, $token, null, null, null, $proof)) {
             $debug['result'] = false;
             $this->lastCacheDebug = $debug;
             return false;
