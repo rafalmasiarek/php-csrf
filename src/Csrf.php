@@ -14,10 +14,14 @@ namespace rafalmasiarek\Csrf;
  * Security:
  *  - Each container has its own session bucket, derived key (HKDF), optional pepper,
  *    and AES-GCM Additional Authenticated Data (AAD) binding.
- *  - Token payload binds to container id (cid), IP (optional), UA (optional), and iat.
+ *  - Token payload binds to container id (cid), IP (optional), UA (optional), origin (optional), and iat.
  *  - Optional per-container origin-scope: allowed_origins whitelist checked on validation.
  *    When the context provider also implements OriginProviderInterface the origin is
  *    resolved automatically; pass an explicit $origin override to validateFor() otherwise.
+ *  - Optional per-container origin binding: when container config 'origin' is set (non-null),
+ *    that trusted origin is embedded in the payload at generation time and compared against
+ *    the resolved request origin at validation time. This is independent from, and
+ *    complementary to, the allowed_origins whitelist above.
  */
 class Csrf
 {
@@ -45,7 +49,10 @@ class Csrf
      *  - pepper          (?string)       : optional per-container binary secret for HKDF salt
      *  - allowed_origins (list<string>)  : origin whitelist; empty = no restriction
      *  - origin_mode     (string)        : 'lenient' (null origin passes) | 'strict' (null origin blocked)
-     * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string}>
+     *  - origin          (?string)       : trusted origin; when non-null, it is embedded in the
+     *                                      payload at generation and enforced against the request
+     *                                      origin at validation (default: null = binding disabled)
+     * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string}>
      */
     private array $containerOptions = [];
 
@@ -87,6 +94,7 @@ class Csrf
             'pepper'          => null,
             'allowed_origins' => [],
             'origin_mode'     => 'lenient',
+            'origin'          => null,
         ];
         $this->containerOptions[$containerId] = array_replace($defaults, $options);
         return $this;
@@ -161,6 +169,8 @@ class Csrf
      * @param string|null $ip          Optional client IP override.
      * @param string|null $userAgent   Optional User-Agent override.
      * @return string Encrypted token.
+     * @throws \RuntimeException If the container's 'origin' is set but does not normalize
+     *                           to a valid http(s) origin.
      */
     public function generateFor(string $containerId, ?string $ip = null, ?string $userAgent = null): string
     {
@@ -181,12 +191,23 @@ class Csrf
         $resolvedIp = $this->resolveIp($ip);
         $resolvedUa = $this->resolveUserAgent($userAgent);
 
+        $boundOrigin = '';
+        if ($cfg['origin'] !== null) {
+            $boundOrigin = $this->normalizeOrigin($cfg['origin']);
+            if ($boundOrigin === null) {
+                throw new \RuntimeException(
+                    "Container '{$containerId}' has an invalid 'origin' configured: '{$cfg['origin']}'."
+                );
+            }
+        }
+
         $payload = [
-            'cid'   => $containerId,
-            'token' => $state['token'],
-            'ip'    => $cfg['bind_ip'] ? $resolvedIp : '',
-            'ua'    => $cfg['bind_ua'] ? $resolvedUa : '',
-            'iat'   => $state['iat'],
+            'cid'    => $containerId,
+            'token'  => $state['token'],
+            'ip'     => $cfg['bind_ip'] ? $resolvedIp : '',
+            'ua'     => $cfg['bind_ua'] ? $resolvedUa : '',
+            'iat'    => $state['iat'],
+            'origin' => $boundOrigin,
         ];
 
         $this->lastPayload = $payload;
@@ -255,6 +276,10 @@ class Csrf
             return false;
         }
 
+        if (!$this->checkBoundOrigin($cfg, $payload, $origin)) {
+            return false;
+        }
+
         if ($this->isExpired($state)) {
             return false;
         }
@@ -303,6 +328,10 @@ class Csrf
             ($payload['ip'] ?? '') !== $expIp ||
             ($payload['ua'] ?? '') !== $expUa
         ) {
+            return false;
+        }
+
+        if (!$this->checkBoundOrigin($cfg, $payload, $origin)) {
             return false;
         }
 
@@ -380,6 +409,7 @@ class Csrf
             'pepper'          => null,
             'allowed_origins' => [],
             'origin_mode'     => 'lenient',
+            'origin'          => null,
         ];
         $cfg = $this->containerOptions[$containerId] ?? $defaults;
         $bucketKey = ($cfg['prefix'] !== '' ? $cfg['prefix'] : '') . $containerId;
@@ -476,6 +506,74 @@ class Csrf
         $mode     = (string) ($cfg['origin_mode'] ?? 'lenient');
         $resolved = $this->resolveOrigin($origin);
         return OriginMatcher::matches($resolved, $patterns, $mode);
+    }
+
+    /**
+     * Verifies the payload's bound origin against the current request origin.
+     *
+     * No-op (returns true) when the container has no 'origin' configured.
+     * When configured, both the stored and the resolved request origin must be
+     * present, normalized, and equal (constant-time comparison); a missing
+     * request origin is always rejected (strict fail-closed policy).
+     *
+     * @param array       $cfg     Resolved container configuration.
+     * @param array       $payload Decrypted token payload.
+     * @param string|null $origin  Explicit origin override (null = auto-resolve).
+     *
+     * @return bool True when the origin binding check passes.
+     */
+    private function checkBoundOrigin(array $cfg, array $payload, ?string $origin): bool
+    {
+        if ($cfg['origin'] === null) {
+            return true;
+        }
+
+        $expected = (string) ($payload['origin'] ?? '');
+        $actual   = $this->normalizeOrigin($this->resolveOrigin($origin));
+
+        if ($expected === '' || $actual === null) {
+            return false;
+        }
+
+        return hash_equals($expected, $actual);
+    }
+
+    /**
+     * Normalizes an HTTP origin to scheme://host[:port] form.
+     *
+     * Lowercases scheme and host, strips a trailing slash, and omits the
+     * port when it matches the scheme's default (443 for https, 80 for http).
+     * Only http/https schemes are accepted; anything else (or malformed
+     * input) normalizes to null.
+     *
+     * @param string|null $origin Raw origin value.
+     *
+     * @return string|null Normalized origin, or null when invalid/absent.
+     */
+    private function normalizeOrigin(?string $origin): ?string
+    {
+        if ($origin === null || $origin === '') {
+            return null;
+        }
+
+        $parts = parse_url($origin);
+        if (!isset($parts['scheme'], $parts['host'])) {
+            return null;
+        }
+
+        $scheme = strtolower($parts['scheme']);
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return null;
+        }
+
+        $host = strtolower($parts['host']);
+        $port = $parts['port'] ?? null;
+
+        if (($scheme === 'https' && $port === 443) || ($scheme === 'http' && $port === 80)) {
+            $port = null;
+        }
+
+        return $scheme . '://' . $host . ($port !== null ? ':' . $port : '');
     }
 
     /**
@@ -640,6 +738,7 @@ class Csrf
             'pepper_set'      => $cfg['pepper'] !== null,
             'allowed_origins' => $cfg['allowed_origins'],
             'origin_mode'     => $cfg['origin_mode'],
+            'origin'          => $cfg['origin'],
         ];
 
         $allowedOrigins = (array) ($cfg['allowed_origins'] ?? []);
@@ -723,6 +822,24 @@ class Csrf
                 'ua_match'    => ($payload['ua'] ?? '') === $expUa,
             ];
             return $debug;
+        }
+
+        if ($cfg['origin'] !== null) {
+            $boundExpected = (string) ($payload['origin'] ?? '');
+            $boundActual   = $this->normalizeOrigin($this->resolveOrigin($origin));
+            $boundMatch = $boundExpected !== ''
+                && $boundActual !== null
+                && hash_equals($boundExpected, $boundActual);
+            $debug['bound_origin'] = [
+                'expected' => $boundExpected,
+                'actual'   => $boundActual,
+                'match'    => $boundMatch,
+            ];
+            if (!$debug['bound_origin']['match']) {
+                $debug['reason'] = 'bound_origin_mismatch';
+                return $debug;
+            }
+            $debug['steps'][] = 'bound_origin_ok';
         }
 
         if ($this->isExpired($state)) {

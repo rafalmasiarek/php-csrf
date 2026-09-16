@@ -268,4 +268,193 @@ final class CsrfTest extends TestCase
         $token = $csrf->regenerateFor('wildcard');
         $this->assertFalse($csrf->validateFor('wildcard', $token, null, null, 'https://a.b.example.com'));
     }
+
+    /* ===================== Csrf origin-binding integration tests ===================== */
+
+    /**
+     * Matching normalized origin validates successfully.
+     */
+    public function testOriginBindingMatchingOriginIsValid(): void
+    {
+        $csrf = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertTrue($csrf->validateFor('bound', $token, null, null, 'https://example.com'));
+    }
+
+    /**
+     * A different scheme is rejected.
+     */
+    public function testOriginBindingDifferentSchemeIsRejected(): void
+    {
+        $csrf = (new Csrf(str_repeat('N', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertFalse($csrf->validateFor('bound', $token, null, null, 'http://example.com'));
+    }
+
+    /**
+     * A different host is rejected.
+     */
+    public function testOriginBindingDifferentHostIsRejected(): void
+    {
+        $csrf = (new Csrf(str_repeat('O', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertFalse($csrf->validateFor('bound', $token, null, null, 'https://evil.example.org'));
+    }
+
+    /**
+     * A subdomain is treated as a distinct origin and rejected.
+     */
+    public function testOriginBindingSubdomainIsRejected(): void
+    {
+        $csrf = (new Csrf(str_repeat('P', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertFalse($csrf->validateFor('bound', $token, null, null, 'https://sub.example.com'));
+    }
+
+    /**
+     * Explicit default HTTPS port normalizes to the same origin and validates.
+     */
+    public function testOriginBindingDefaultHttpsPortNormalizes(): void
+    {
+        $csrf = (new Csrf(str_repeat('Q', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertTrue($csrf->validateFor('bound', $token, null, null, 'https://example.com:443'));
+    }
+
+    /**
+     * A non-default port is a distinct origin and is rejected.
+     */
+    public function testOriginBindingDifferentPortIsRejected(): void
+    {
+        $csrf = (new Csrf(str_repeat('R', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertFalse($csrf->validateFor('bound', $token, null, null, 'https://example.com:8443'));
+    }
+
+    /**
+     * Hostname casing is normalized before comparison.
+     */
+    public function testOriginBindingUppercaseHostnameNormalizes(): void
+    {
+        $csrf = (new Csrf(str_repeat('S', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertTrue($csrf->validateFor('bound', $token, null, null, 'https://EXAMPLE.COM'));
+    }
+
+    /**
+     * A missing request origin is rejected when origin binding is configured (fail-closed).
+     */
+    public function testOriginBindingMissingRequestOriginIsRejected(): void
+    {
+        unset($_SERVER['HTTP_ORIGIN'], $_SERVER['HTTP_REFERER']);
+
+        $csrf = (new Csrf(str_repeat('T', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+        $this->assertFalse($csrf->validateFor('bound', $token, null, null, null));
+    }
+
+    /**
+     * Leaving 'origin' unset (default null) means the request origin never affects validation.
+     */
+    public function testOriginBindingDisabledDoesNotAffectValidation(): void
+    {
+        $csrf = (new Csrf(str_repeat('U', 32), 900))
+            ->withContainer('unbound', [
+                'bind_ip' => false,
+                'bind_ua' => false,
+            ]);
+
+        $token = $csrf->generateFor('unbound');
+        $this->assertTrue($csrf->validateFor('unbound', $token, null, null, 'https://anything.example.net'));
+        $token = $csrf->regenerateFor('unbound');
+        $this->assertTrue($csrf->validateFor('unbound', $token, null, null, null));
+    }
+
+    /**
+     * Tampering with the encrypted token invalidates the AES-GCM auth tag before
+     * origin comparison is ever reached.
+     */
+    public function testOriginBindingTamperedTokenFailsAuthentication(): void
+    {
+        $csrf = (new Csrf(str_repeat('V', 32), 900))
+            ->withContainer('bound', [
+                'bind_ip'     => false,
+                'bind_ua'     => false,
+                'origin'      => 'https://example.com',
+            ]);
+
+        $token = $csrf->generateFor('bound');
+
+        $raw = base64_decode($token, true);
+        $this->assertIsString($raw);
+        $tampered = substr($raw, 0, -1) . chr(ord(substr($raw, -1)) ^ 0x01);
+        $tamperedToken = base64_encode($tampered);
+
+        $this->assertFalse($csrf->validateFor('bound', $tamperedToken, null, null, 'https://example.com'));
+    }
+
+    /**
+     * A configured 'origin' that fails to normalize (malformed/unsupported scheme)
+     * fails loudly at generation time instead of silently embedding an empty value.
+     */
+    public function testOriginBindingWithMalformedOriginThrows(): void
+    {
+        $csrf = (new Csrf(str_repeat('W', 32), 900))
+            ->withContainer('misconfigured', [
+                'bind_ip' => false,
+                'bind_ua' => false,
+                'origin'  => 'not-a-valid-origin',
+            ]);
+
+        $this->expectException(\RuntimeException::class);
+        $csrf->generateFor('misconfigured');
+    }
 }
