@@ -5,6 +5,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 does not strictly follow SemVer for pre-1.0-style breaking changes across minor versions — see
 each entry's "Breaking" notes.
 
+## [1.5.1] — 2026-09-16
+
+### Fixed
+
+- `HtmlHelper::input()` and `HtmlHelper::token()` gain trailing optional `$ip` and `$userAgent`
+  parameters, passed through to `issueFor()`/`generateFor()`. Without this, a consumer resolving
+  the real client IP behind a trusted proxy/CDN for `validateFor()` had no way to issue tokens
+  bound to that same address — generation always fell back to the default provider's raw
+  connecting address, so `bind_ip` would never match once validation started passing the real IP.
+
 ## [1.5.0] — 2026-09-16
 
 ### Added
