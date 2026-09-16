@@ -25,14 +25,26 @@ final class HtmlHelper
      * are required to start benefiting from it; it has no effect on
      * validation unless the receiving container sets 'require_proof'.
      *
-     * @param Csrf   $csrf
-     * @param string $containerId Container name (default: "default").
-     * @param string $inputName   Input field name for the token (default: "_csrf").
+     * @param Csrf        $csrf
+     * @param string      $containerId Container name (default: "default").
+     * @param string      $inputName   Input field name for the token (default: "_csrf").
+     * @param string|null $ip          Optional client IP override. Pass this whenever the
+     *                                 caller already resolves the real client IP itself (e.g.
+     *                                 behind a trusted proxy/CDN) — otherwise bind_ip validates
+     *                                 against the proxy's address instead of the visitor's, and
+     *                                 a validateFor() call that does pass the real IP will never
+     *                                 match a token issued without it.
+     * @param string|null $userAgent   Optional User-Agent override.
      * @return string HTML string, already escaped.
      */
-    public static function input(Csrf $csrf, string $containerId = 'default', string $inputName = '_csrf'): string
-    {
-        $pair  = $csrf->issueFor($containerId);
+    public static function input(
+        Csrf $csrf,
+        string $containerId = 'default',
+        string $inputName = '_csrf',
+        ?string $ip = null,
+        ?string $userAgent = null
+    ): string {
+        $pair  = $csrf->issueFor($containerId, $ip, $userAgent);
         $value = htmlspecialchars($pair->token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $name  = htmlspecialchars($inputName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
@@ -56,12 +68,18 @@ final class HtmlHelper
      * wrapping it in an HTML input (e.g. for embedding in a <meta> tag or
      * passing to client-side JavaScript). Does not compute or expose a proof.
      *
-     * @param Csrf   $csrf
-     * @param string $containerId Container name (default: "default").
+     * @param Csrf        $csrf
+     * @param string      $containerId Container name (default: "default").
+     * @param string|null $ip          Optional client IP override (see input()).
+     * @param string|null $userAgent   Optional User-Agent override.
      * @return string Encrypted token value (not HTML-escaped).
      */
-    public static function token(Csrf $csrf, string $containerId = 'default'): string
-    {
-        return $csrf->generateFor($containerId);
+    public static function token(
+        Csrf $csrf,
+        string $containerId = 'default',
+        ?string $ip = null,
+        ?string $userAgent = null
+    ): string {
+        return $csrf->generateFor($containerId, $ip, $userAgent);
     }
 }
