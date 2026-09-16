@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use rafalmasiarek\Csrf\Csrf;
 use rafalmasiarek\Csrf\ClientContextProviderInterface;
 use rafalmasiarek\Csrf\OriginMatcher;
+use rafalmasiarek\Csrf\OriginProviderInterface;
 use rafalmasiarek\Csrf\SessionBindingProviderInterface;
 
 /**
@@ -19,6 +20,38 @@ final class FixedSessionBindingProvider implements SessionBindingProviderInterfa
     }
 
     public function getSessionBinding(): string
+    {
+        return $this->value;
+    }
+}
+
+/**
+ * Test double: IP/UA context provider that does NOT also implement
+ * OriginProviderInterface, to verify origin resolution falls back correctly.
+ */
+final class IpUaOnlyContextProvider implements ClientContextProviderInterface
+{
+    public function getIp(): string
+    {
+        return '198.51.100.7';
+    }
+
+    public function getUserAgent(): string
+    {
+        return 'ip-ua-only/1.0';
+    }
+}
+
+/**
+ * Test double: fixed origin provider, independent of any context provider.
+ */
+final class FixedOriginProvider implements OriginProviderInterface
+{
+    public function __construct(private ?string $value)
+    {
+    }
+
+    public function getOrigin(): ?string
     {
         return $this->value;
     }
@@ -677,5 +710,56 @@ final class CsrfTest extends TestCase
         $pair = $csrf->issueFor('profile');
         $this->assertNotNull($pair->proof);
         $this->assertTrue($csrf->validateFor('profile', $pair->token, null, null, null, $pair->proof));
+    }
+
+    /* ===================== OriginProviderInterface resolution tests ===================== */
+
+    /**
+     * A custom ClientContextProviderInterface that does NOT also implement
+     * OriginProviderInterface still gets automatic origin resolution, via the
+     * fallback to ServerGlobalClientContextProvider — origin-scope checks are
+     * not silently disabled just because a custom IP/UA provider was injected.
+     */
+    public function testOriginResolvedViaFallbackWhenContextProviderLacksOriginInterface(): void
+    {
+        $_SERVER['HTTP_ORIGIN'] = 'https://example.com';
+
+        $csrf = (new Csrf(str_repeat('l', 32), 900, new IpUaOnlyContextProvider()))
+            ->withContainer('guarded', [
+                'bind_ip'         => false,
+                'bind_ua'         => false,
+                'allowed_origins' => ['https://example.com'],
+            ]);
+
+        $token = $csrf->generateFor('guarded');
+        $this->assertTrue($csrf->validateFor('guarded', $token));
+
+        unset($_SERVER['HTTP_ORIGIN']);
+    }
+
+    /**
+     * An explicit $originProvider constructor argument takes precedence over
+     * both an override-less resolution and the context provider's own origin.
+     */
+    public function testExplicitOriginProviderIsUsed(): void
+    {
+        $_SERVER['HTTP_ORIGIN'] = 'https://from-server-global.example.com';
+
+        $csrf = (new Csrf(
+            str_repeat('m', 32),
+            900,
+            null,
+            null,
+            new FixedOriginProvider('https://from-custom-provider.example.com')
+        ))->withContainer('guarded', [
+            'bind_ip'         => false,
+            'bind_ua'         => false,
+            'allowed_origins' => ['https://from-custom-provider.example.com'],
+        ]);
+
+        $token = $csrf->generateFor('guarded');
+        $this->assertTrue($csrf->validateFor('guarded', $token));
+
+        unset($_SERVER['HTTP_ORIGIN']);
     }
 }

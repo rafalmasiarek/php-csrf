@@ -16,8 +16,9 @@ namespace rafalmasiarek\Csrf;
  *    and AES-GCM Additional Authenticated Data (AAD) binding.
  *  - Token payload binds to container id (cid), IP (optional), UA (optional), origin (optional), and iat.
  *  - Optional per-container origin-scope: allowed_origins whitelist checked on validation.
- *    When the context provider also implements OriginProviderInterface the origin is
- *    resolved automatically; pass an explicit $origin override to validateFor() otherwise.
+ *    The origin is resolved automatically via the constructor's $originProvider (defaults to
+ *    ServerGlobalClientContextProvider); pass an explicit $origin override to validateFor()
+ *    otherwise.
  *  - Optional per-container origin binding: when container config 'origin' is set (non-null),
  *    that trusted origin is embedded in the payload at generation time and compared against
  *    the resolved request origin at validation time. This is independent from, and
@@ -73,6 +74,9 @@ class Csrf
     /** Provides the session-bound value used for _csrf_proof. */
     private SessionBindingProviderInterface $sessionBindingProvider;
 
+    /** Provides the HTTP Origin for origin-scope validation and origin binding. */
+    private OriginProviderInterface $originProvider;
+
     /**
      * @param string $cipherKey 32-byte key used for AES-256-GCM encryption.
      * @param int    $ttlSeconds Token TTL (seconds). 0 disables expiration.
@@ -80,13 +84,18 @@ class Csrf
      * @param SessionBindingProviderInterface|null $sessionBindingProvider Optional session binding
      *                                                                     provider for _csrf_proof
      *                                                                     (default: native PHP session id).
+     * @param OriginProviderInterface|null $originProvider Optional origin provider. Defaults to
+     *                                                      $contextProvider when it also implements
+     *                                                      OriginProviderInterface, otherwise falls
+     *                                                      back to ServerGlobalClientContextProvider.
      * @throws \InvalidArgumentException If $cipherKey length is not exactly 32 bytes.
      */
     public function __construct(
         string $cipherKey,
         int $ttlSeconds = 900,
         ?ClientContextProviderInterface $contextProvider = null,
-        ?SessionBindingProviderInterface $sessionBindingProvider = null
+        ?SessionBindingProviderInterface $sessionBindingProvider = null,
+        ?OriginProviderInterface $originProvider = null
     ) {
         if (strlen($cipherKey) !== 32) {
             throw new \InvalidArgumentException('Cipher key must be exactly 32 bytes.');
@@ -95,6 +104,10 @@ class Csrf
         $this->ttl = $ttlSeconds;
         $this->contextProvider = $contextProvider ?? new ServerGlobalClientContextProvider();
         $this->sessionBindingProvider = $sessionBindingProvider ?? new PhpSessionBindingProvider();
+        $this->originProvider = $originProvider
+            ?? ($this->contextProvider instanceof OriginProviderInterface
+                ? $this->contextProvider
+                : new ServerGlobalClientContextProvider());
     }
 
     /**
@@ -538,8 +551,7 @@ class Csrf
     /**
      * Resolves the HTTP Origin for origin-scope validation.
      *
-     * Uses the explicit $override when provided; falls back to the context
-     * provider when it implements OriginProviderInterface; returns null otherwise.
+     * Uses the explicit $override when provided; falls back to $originProvider otherwise.
      *
      * @param string|null $override Explicit origin passed by the caller.
      *
@@ -550,10 +562,7 @@ class Csrf
         if ($override !== null) {
             return $override;
         }
-        if ($this->contextProvider instanceof OriginProviderInterface) {
-            return $this->contextProvider->getOrigin();
-        }
-        return null;
+        return $this->originProvider->getOrigin();
     }
 
     /**
