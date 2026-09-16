@@ -5,6 +5,23 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 does not strictly follow SemVer for pre-1.0-style breaking changes across minor versions — see
 each entry's "Breaking" notes.
 
+## [1.6.0] — 2026-09-16
+
+### Added
+
+- **App-level container defaults** (`Csrf::setDefaults()`): registers a global options layer
+  applied to every container, sitting between the library's built-in fallback values and any
+  per-container options passed to `withContainer()` (`CONTAINER_OPTION_DEFAULTS < setDefaults()
+  < withContainer()`). Also applies to container ids used without prior `withContainer()`
+  registration at all. Previously, an app wanting shared defaults across containers had to
+  duplicate the same merge logic itself before calling `withContainer()`, and unregistered
+  container ids had no way to inherit app-level defaults at all.
+- **`Csrf::getContainerConfig()`**: returns the fully-resolved effective configuration for a
+  container id — built-in defaults, app-registered defaults, and any per-container override,
+  merged in that order — without requiring prior registration. Lets a consumer report a
+  container's effective policy (e.g. `bind_ip`, `require_proof`) without reimplementing the
+  merge itself.
+
 ## [1.5.1] — 2026-09-16
 
 ### Fixed

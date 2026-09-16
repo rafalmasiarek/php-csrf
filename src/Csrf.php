@@ -36,6 +36,24 @@ class Csrf
     /** Maximum accepted length of a submitted _csrf_proof value, before any HMAC work. */
     private const MAX_PROOF_LENGTH = 128;
 
+    /**
+     * Built-in fallback values for any container option not supplied by
+     * setDefaults() or withContainer(). Bottom layer of the 3-layer merge:
+     * CONTAINER_OPTION_DEFAULTS < $defaults (setDefaults) < per-container options (withContainer).
+     *
+     * @var array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool}
+     */
+    private const CONTAINER_OPTION_DEFAULTS = [
+        'prefix'          => '',
+        'bind_ip'         => true,
+        'bind_ua'         => true,
+        'pepper'          => null,
+        'allowed_origins' => [],
+        'origin_mode'     => 'lenient',
+        'origin'          => null,
+        'require_proof'   => false,
+    ];
+
     /** Root session namespace for all CSRF state. */
     private string $sessionRoot = '_csrf_v2';
 
@@ -67,6 +85,14 @@ class Csrf
      * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool}>
      */
     private array $containerOptions = [];
+
+    /**
+     * App-registered defaults, set once via setDefaults(). Applied to every
+     * container beneath CONTAINER_OPTION_DEFAULTS and above per-container options.
+     *
+     * @var array<string, mixed>
+     */
+    private array $defaults = [];
 
     /** Provides client IP / User-Agent context. */
     private ClientContextProviderInterface $contextProvider;
@@ -113,24 +139,52 @@ class Csrf
     /**
      * Configure/override options for a container ID.
      *
+     * Merges, in order: built-in defaults < setDefaults() < $options.
+     *
      * @param string $containerId Container identifier (e.g., 'signup', 'profile').
      * @param array  $options     See $containerOptions description.
      * @return $this
      */
     public function withContainer(string $containerId, array $options): self
     {
-        $defaults = [
-            'prefix'          => '',
-            'bind_ip'         => true,
-            'bind_ua'         => true,
-            'pepper'          => null,
-            'allowed_origins' => [],
-            'origin_mode'     => 'lenient',
-            'origin'          => null,
-            'require_proof'   => false,
-        ];
-        $this->containerOptions[$containerId] = array_replace($defaults, $options);
+        $this->containerOptions[$containerId] = array_replace(
+            self::CONTAINER_OPTION_DEFAULTS,
+            $this->defaults,
+            $options
+        );
         return $this;
+    }
+
+    /**
+     * Registers global default options applied to every container.
+     *
+     * Sits between the library's built-in fallback values and any per-container
+     * options passed to withContainer(): CONTAINER_OPTION_DEFAULTS < $defaults < withContainer().
+     * Also applies to container ids used without prior withContainer() registration
+     * at all (e.g. ad-hoc container ids resolved at request time).
+     *
+     * @param array $defaults Same shape as withContainer()'s $options.
+     * @return $this
+     */
+    public function setDefaults(array $defaults): self
+    {
+        $this->defaults = $defaults;
+        return $this;
+    }
+
+    /**
+     * Returns the fully-resolved effective configuration for a container id —
+     * built-in defaults, app-registered defaults (setDefaults()), and any
+     * per-container override (withContainer()), merged in that order. Works
+     * even when the container was never explicitly registered.
+     *
+     * @param string $containerId
+     * @return array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool}
+     */
+    public function getContainerConfig(string $containerId): array
+    {
+        [, $cfg] = $this->resolveContainer($containerId);
+        return $cfg;
     }
 
     /** @return int TTL in seconds (0 means no expiry). */
@@ -483,17 +537,8 @@ class Csrf
      */
     private function resolveContainer(string $containerId): array
     {
-        $defaults = [
-            'prefix'          => '',
-            'bind_ip'         => true,
-            'bind_ua'         => true,
-            'pepper'          => null,
-            'allowed_origins' => [],
-            'origin_mode'     => 'lenient',
-            'origin'          => null,
-            'require_proof'   => false,
-        ];
-        $cfg = $this->containerOptions[$containerId] ?? $defaults;
+        $cfg = $this->containerOptions[$containerId]
+            ?? array_replace(self::CONTAINER_OPTION_DEFAULTS, $this->defaults);
         $bucketKey = ($cfg['prefix'] !== '' ? $cfg['prefix'] : '') . $containerId;
 
         if (!isset($_SESSION[$this->sessionRoot]) || !is_array($_SESSION[$this->sessionRoot])) {
