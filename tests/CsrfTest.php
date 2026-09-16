@@ -89,6 +89,50 @@ final class CsrfTest extends TestCase
         $this->assertTrue($csrf->validateFor('loose', $token));
     }
 
+    public function testSetDefaultsAppliesToRegisteredContainerWithoutOverride(): void
+    {
+        $csrf = (new Csrf(str_repeat('X', 32), 900))
+            ->setDefaults(['bind_ua' => false, 'prefix' => 'app_'])
+            ->withContainer('signup', []);
+
+        $cfg = $csrf->getContainerConfig('signup');
+        $this->assertFalse($cfg['bind_ua']);
+        $this->assertSame('app_', $cfg['prefix']);
+        $this->assertTrue($cfg['bind_ip']);
+    }
+
+    public function testWithContainerOverrideWinsOverDefaults(): void
+    {
+        $csrf = (new Csrf(str_repeat('X', 32), 900))
+            ->setDefaults(['bind_ua' => false])
+            ->withContainer('signup', ['bind_ua' => true]);
+
+        $cfg = $csrf->getContainerConfig('signup');
+        $this->assertTrue($cfg['bind_ua']);
+    }
+
+    public function testSetDefaultsAppliesToUnregisteredContainer(): void
+    {
+        $csrf = (new Csrf(str_repeat('X', 32), 900))
+            ->setDefaults(['bind_ip' => false, 'bind_ua' => false]);
+
+        $token = $csrf->generateFor('adhoc');
+        $_SERVER['REMOTE_ADDR'] = '10.1.2.3';
+        $_SERVER['HTTP_USER_AGENT'] = 'changed/ua';
+        $this->assertTrue($csrf->validateFor('adhoc', $token));
+    }
+
+    public function testGetContainerConfigWithoutSetDefaultsReturnsBuiltIn(): void
+    {
+        $csrf = new Csrf(str_repeat('X', 32), 900);
+
+        $cfg = $csrf->getContainerConfig('unregistered');
+        $this->assertTrue($cfg['bind_ip']);
+        $this->assertTrue($cfg['bind_ua']);
+        $this->assertSame('', $cfg['prefix']);
+        $this->assertFalse($cfg['require_proof']);
+    }
+
     public function testExpiration(): void
     {
         $csrf = new Csrf(str_repeat('D', 32), 1);
