@@ -460,3 +460,9 @@ FodyWeavers.xsd
 
 # End of https://www.toptal.com/developers/gitignore/api/composer,visualstudio,phpunit,macos
 
+### Local overrides ###
+# The VisualStudio section's "!?*.[Cc]ache/" re-include rule above unintentionally
+# un-ignores PHPUnit's .phpunit.cache/ directory (it ends in ".cache/" too). Re-ignore
+# it explicitly here, since gitignore rule order matters and this comes last.
+.phpunit.cache/
+
