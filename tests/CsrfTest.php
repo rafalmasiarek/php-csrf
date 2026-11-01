@@ -806,4 +806,110 @@ final class CsrfTest extends TestCase
 
         unset($_SERVER['HTTP_ORIGIN']);
     }
+
+    /**
+     * A container with a 'private_key' issues and validates tokens correctly,
+     * fully independent of the Csrf instance's master key.
+     */
+    public function testPrivateKeyIssuesAndValidates(): void
+    {
+        $csrf = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', ['private_key' => str_repeat('S', 32)]);
+
+        $token = $csrf->generateFor('sideapp');
+        $this->assertTrue($csrf->validateFor('sideapp', $token));
+    }
+
+    /**
+     * A token issued under a container's 'private_key' must not validate against
+     * a Csrf instance that only knows the master key — the whole point of the
+     * option is that holding the master key does not grant access to this
+     * container's tokens.
+     */
+    public function testPrivateKeyTokenDoesNotValidateUnderMasterKeyAlone(): void
+    {
+        $issuer = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', ['private_key' => str_repeat('S', 32)]);
+        $token = $issuer->generateFor('sideapp');
+
+        $masterOnly = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', []);
+
+        $this->assertFalse($masterOnly->validateFor('sideapp', $token));
+    }
+
+    /**
+     * Conversely, a master-key container's token must not validate against a
+     * second instance holding only the (different) private key — confirms the
+     * independence is symmetric, not just one-directional.
+     */
+    public function testMasterKeyTokenDoesNotValidateUnderPrivateKeyAlone(): void
+    {
+        $masterIssuer = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', []);
+        $token = $masterIssuer->generateFor('sideapp');
+
+        $privateOnly = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', ['private_key' => str_repeat('S', 32)]);
+
+        $this->assertFalse($privateOnly->validateFor('sideapp', $token));
+    }
+
+    /**
+     * Two different Csrf instances (simulating two separately deployed apps)
+     * that both know the same 'private_key' for a container can issue and
+     * validate each other's tokens for it, without either needing the master key.
+     */
+    public function testPrivateKeySharedAcrossIndependentInstances(): void
+    {
+        $privateKey = str_repeat('S', 32);
+
+        $appOne = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', ['private_key' => $privateKey, 'bind_ip' => false, 'bind_ua' => false]);
+        $appTwo = (new Csrf(str_repeat('N', 32), 900))
+            ->withContainer('sideapp', ['private_key' => $privateKey, 'bind_ip' => false, 'bind_ua' => false]);
+
+        $token = $appOne->generateFor('sideapp');
+        $this->assertTrue($appTwo->validateFor('sideapp', $token));
+    }
+
+    /**
+     * The session-bound proof is also derived from 'private_key' when set —
+     * a mismatched proof key would otherwise make require_proof unusable
+     * across two independently-keyed instances.
+     */
+    public function testPrivateKeyProofValidatesAcrossIndependentInstances(): void
+    {
+        $privateKey = str_repeat('S', 32);
+        $binding = new FixedSessionBindingProvider('shared-session-id');
+
+        $appOne = (new Csrf(str_repeat('M', 32), 900, null, $binding))
+            ->withContainer('sideapp', ['private_key' => $privateKey, 'require_proof' => true]);
+        $appTwo = (new Csrf(str_repeat('N', 32), 900, null, $binding))
+            ->withContainer('sideapp', ['private_key' => $privateKey, 'require_proof' => true]);
+
+        $pair = $appOne->issueFor('sideapp');
+        $this->assertNotNull($pair->proof);
+        $this->assertTrue($appTwo->validateFor('sideapp', $pair->token, null, null, null, $pair->proof));
+    }
+
+    /** withContainer() rejects a 'private_key' that is not exactly 32 bytes. */
+    public function testPrivateKeyWrongLengthThrows(): void
+    {
+        $csrf = new Csrf(str_repeat('M', 32), 900);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $csrf->withContainer('sideapp', ['private_key' => 'too-short']);
+    }
+
+    /** getContainerConfig() reports whether a container has a 'private_key' set. */
+    public function testGetContainerConfigExposesPrivateKey(): void
+    {
+        $csrf = (new Csrf(str_repeat('M', 32), 900))
+            ->withContainer('sideapp', ['private_key' => str_repeat('S', 32)])
+            ->withContainer('normal', []);
+
+        $this->assertSame(str_repeat('S', 32), $csrf->getContainerConfig('sideapp')['private_key']);
+        $this->assertNull($csrf->getContainerConfig('normal')['private_key']);
+    }
 }
