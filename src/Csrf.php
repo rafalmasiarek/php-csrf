@@ -30,6 +30,12 @@ namespace rafalmasiarek\Csrf;
  *    The proof is transparent: passing it to validateFor()/validateCachedFor() always
  *    verifies it, while its absence is only rejected when the container config
  *    'require_proof' is true.
+ *  - Optional per-container 'private_key': when set, HKDF derives that container's
+ *    encryption and proof keys from this key instead of the constructor's master
+ *    $cipherKey — total key independence from every other container, including ones
+ *    sharing the same Csrf instance/process. Meant for a separate, independently
+ *    deployed consumer that must be able to issue/validate this one container's
+ *    tokens without ever learning the master key.
  */
 class Csrf
 {
@@ -41,7 +47,7 @@ class Csrf
      * setDefaults() or withContainer(). Bottom layer of the 3-layer merge:
      * CONTAINER_OPTION_DEFAULTS < $defaults (setDefaults) < per-container options (withContainer).
      *
-     * @var array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool}
+     * @var array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool,private_key:?string}
      */
     private const CONTAINER_OPTION_DEFAULTS = [
         'prefix'          => '',
@@ -52,6 +58,7 @@ class Csrf
         'origin_mode'     => 'lenient',
         'origin'          => null,
         'require_proof'   => false,
+        'private_key'     => null,
     ];
 
     /** Root session namespace for all CSRF state. */
@@ -82,7 +89,10 @@ class Csrf
      *                                      payload at generation and enforced against the request
      *                                      origin at validation (default: null = binding disabled)
      *  - require_proof   (bool)          : reject validation when _csrf_proof is missing (default: false)
-     * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool}>
+     *  - private_key     (?string)       : 32-byte key; when set, this container's keys are
+     *                                      derived from it instead of the master $cipherKey
+     *                                      (default: null = derive from master, as before)
+     * @var array<string, array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool,private_key:?string}>
      */
     private array $containerOptions = [];
 
@@ -144,14 +154,23 @@ class Csrf
      * @param string $containerId Container identifier (e.g., 'signup', 'profile').
      * @param array  $options     See $containerOptions description.
      * @return $this
+     * @throws \InvalidArgumentException If $options['private_key'] is set but not exactly 32 bytes.
      */
     public function withContainer(string $containerId, array $options): self
     {
-        $this->containerOptions[$containerId] = array_replace(
+        $merged = array_replace(
             self::CONTAINER_OPTION_DEFAULTS,
             $this->defaults,
             $options
         );
+
+        if ($merged['private_key'] !== null && strlen((string) $merged['private_key']) !== 32) {
+            throw new \InvalidArgumentException(
+                "Container '{$containerId}' has a 'private_key' that is not exactly 32 bytes."
+            );
+        }
+
+        $this->containerOptions[$containerId] = $merged;
         return $this;
     }
 
@@ -179,7 +198,7 @@ class Csrf
      * even when the container was never explicitly registered.
      *
      * @param string $containerId
-     * @return array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool}
+     * @return array{prefix:string,bind_ip:bool,bind_ua:bool,pepper:?string,allowed_origins:list<string>,origin_mode:string,origin:?string,require_proof:bool,private_key:?string}
      */
     public function getContainerConfig(string $containerId): array
     {
@@ -299,7 +318,7 @@ class Csrf
 
         $this->lastPayload = $payload;
 
-        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
+        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper'], $cfg['private_key']);
         $aad = $this->makeAad($containerId, $cfg['prefix']);
         return $this->encrypt($derivedKey, $payload, $aad);
     }
@@ -329,7 +348,7 @@ class Csrf
         }
 
         [, $cfg] = $this->resolveContainer($containerId);
-        $proof = $this->generateProof($containerId, $token, $sessionBinding, $cfg['pepper']);
+        $proof = $this->generateProof($containerId, $token, $sessionBinding, $cfg['pepper'], $cfg['private_key']);
         return new CsrfPair($token, $proof);
     }
 
@@ -369,7 +388,7 @@ class Csrf
             return false;
         }
 
-        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
+        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper'], $cfg['private_key']);
         $aad = $this->makeAad($containerId, $cfg['prefix']);
         $payload = $this->decrypt($derivedKey, $encrypted, $aad);
         if (!$payload) {
@@ -692,7 +711,7 @@ class Csrf
             return false;
         }
 
-        $expected = $this->generateProof($containerId, $rawToken, $sessionBinding, $cfg['pepper']);
+        $expected = $this->generateProof($containerId, $rawToken, $sessionBinding, $cfg['pepper'], $cfg['private_key']);
 
         return hash_equals($expected, $proof);
     }
@@ -705,6 +724,7 @@ class Csrf
      * @param string      $sessionBinding Current session-bound value (see SessionBindingProviderInterface).
      * @param string|null $pepper         Container's optional HKDF pepper (kept in sync with the
      *                                    encryption key derivation for the same container).
+     * @param string|null $privateKey     Container's optional dedicated key (see 'private_key').
      *
      * @return string Base64URL-encoded (unpadded) HMAC-SHA256 proof.
      */
@@ -712,9 +732,10 @@ class Csrf
         string $containerId,
         string $csrfToken,
         string $sessionBinding,
-        ?string $pepper = null
+        ?string $pepper = null,
+        ?string $privateKey = null
     ): string {
-        $proofKey = $this->deriveProofKey($containerId, $pepper);
+        $proofKey = $this->deriveProofKey($containerId, $pepper, $privateKey);
 
         $message = $this->encodeProofFields([
             'csrf-proof-v1',
@@ -786,12 +807,14 @@ class Csrf
      * Derive the per-container 32-byte AES-GCM encryption key with HKDF(SHA-256).
      *
      * @param string      $containerId
-     * @param string|null $pepper Binary salt for HKDF-Extract; optional.
+     * @param string|null $pepper     Binary salt for HKDF-Extract; optional.
+     * @param string|null $privateKey Container's optional dedicated key (see 'private_key');
+     *                                when set, used instead of the master $cipherKey.
      * @return string 32-byte binary key.
      */
-    private function deriveContainerKey(string $containerId, ?string $pepper): string
+    private function deriveContainerKey(string $containerId, ?string $pepper, ?string $privateKey = null): string
     {
-        return $this->deriveKey($containerId, $pepper, 'csrf');
+        return $this->deriveKey($containerId, $pepper, 'csrf', $privateKey);
     }
 
     /**
@@ -799,30 +822,38 @@ class Csrf
      *
      * Uses a distinct HKDF info label from deriveContainerKey() so the proof key
      * is cryptographically independent from the AES-GCM encryption key even
-     * though both are derived from the same master cipher key.
+     * though both are derived from the same base key (master or 'private_key').
      *
      * @param string      $containerId
-     * @param string|null $pepper Binary salt for HKDF-Extract; optional.
+     * @param string|null $pepper     Binary salt for HKDF-Extract; optional.
+     * @param string|null $privateKey Container's optional dedicated key (see 'private_key');
+     *                                when set, used instead of the master $cipherKey.
      * @return string 32-byte binary key.
      */
-    private function deriveProofKey(string $containerId, ?string $pepper): string
+    private function deriveProofKey(string $containerId, ?string $pepper, ?string $privateKey = null): string
     {
-        return $this->deriveKey($containerId, $pepper, 'csrf-proof');
+        return $this->deriveKey($containerId, $pepper, 'csrf-proof', $privateKey);
     }
 
     /**
      * Derive a purpose-scoped 32-byte key with HKDF(SHA-256).
      *
      * @param string      $containerId
-     * @param string|null $pepper  Binary salt for HKDF-Extract; optional.
-     * @param string      $purpose HKDF info label prefix providing domain separation
-     *                             between different key purposes (e.g. 'csrf', 'csrf-proof').
+     * @param string|null $pepper     Binary salt for HKDF-Extract; optional.
+     * @param string      $purpose    HKDF info label prefix providing domain separation
+     *                                between different key purposes (e.g. 'csrf', 'csrf-proof').
+     * @param string|null $privateKey Base key to derive from instead of the master $cipherKey,
+     *                                when the container has its own 'private_key' configured.
      * @return string 32-byte binary key.
      */
-    private function deriveKey(string $containerId, ?string $pepper, string $purpose): string
-    {
+    private function deriveKey(
+        string $containerId,
+        ?string $pepper,
+        string $purpose,
+        ?string $privateKey = null
+    ): string {
         $salt = $pepper ?? '';
-        $prk = hash_hmac('sha256', $this->cipherKey, $salt, true);
+        $prk = hash_hmac('sha256', $privateKey ?? $this->cipherKey, $salt, true);
         $info = $purpose . ':' . $containerId;
         $okm = '';
         $t = '';
@@ -978,6 +1009,7 @@ class Csrf
             'origin_mode'     => $cfg['origin_mode'],
             'origin'          => $cfg['origin'],
             'require_proof'   => $cfg['require_proof'],
+            'private_key_set' => $cfg['private_key'] !== null,
         ];
 
         $proofOk = $this->checkProof($cfg, $containerId, $encrypted, $proof);
@@ -1008,7 +1040,7 @@ class Csrf
             $debug['steps'][] = 'origin_ok';
         }
 
-        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper']);
+        $derivedKey = $this->deriveContainerKey($containerId, $cfg['pepper'], $cfg['private_key']);
         $aad        = $this->makeAad($containerId, $cfg['prefix']);
         $payload    = $this->decrypt($derivedKey, $encrypted, $aad);
 

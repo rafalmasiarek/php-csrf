@@ -12,6 +12,9 @@ an optional session-bound HMAC proof as a second, independent field.
 - Per‑container isolation: replay across forms is impossible
 - Configurable bindings (IP/UA/origin) per container, plus a separate `allowed_origins` whitelist
 - Optional session-bound HMAC proof (`_csrf_proof`), key-separated from the AES-GCM key (HKDF)
+- Optional per-container `private_key`: fully decouple one container's keys from every other
+  container and from the instance's master key — for a separately deployed consumer that must
+  issue/validate just that container's tokens without ever learning the master key
 - Tokens are always single-use (consumed on successful validation, not configurable)
 - TTL support (set `0` to disable expiry — not recommended)
 - Optional cache layer (File / MySQL / Redis) for fast‑path validation
@@ -184,6 +187,35 @@ Run both mechanisms together when you want a specific token bound to a specific 
 broader fallback whitelist for multi-origin deployments.
 
 ---
+
+## Dedicated Per-Container Key (`private_key`)
+
+Every container normally derives its encryption and proof keys (HKDF) from the one master
+`$cipherKey` passed to the `Csrf` constructor — isolated from other containers, but all still
+ultimately decryptable by anyone holding that one master key. Setting `private_key` on a
+container replaces the master key as that container's HKDF base entirely:
+
+```php
+// The app issuing tokens — still has its own master key for every other container.
+$csrf = (new Csrf($masterKey32Bytes, 900))
+    ->withContainer('side-app', ['private_key' => $sideAppKey32Bytes]);
+
+// A separately deployed consumer — only ever holds $sideAppKey32Bytes, never $masterKey32Bytes.
+$sideCsrf = (new Csrf($anyUnrelated32ByteKey, 900))
+    ->withContainer('side-app', ['private_key' => $sideAppKey32Bytes]);
+
+$token = $csrf->generateFor('side-app');
+$sideCsrf->validateFor('side-app', $token); // true — the two instances share only this one key
+```
+
+- Must be exactly 32 bytes; `withContainer()` throws `\InvalidArgumentException` otherwise.
+- Applies to both the encryption key and the `_csrf_proof` key (same HKDF domain separation as
+  the master-key case) — `require_proof` works the same way across independently-keyed instances.
+- Leaving it unset (default `null`) is a no-op: the container derives from the master key, as
+  before this option existed.
+- The constructor's own master `$cipherKey` argument is unused for a container configured this
+  way (any valid 32-byte placeholder works) — it still has to be supplied, since it's a
+  constructor-level, not container-level, argument.
 
 ## Session-Bound Proof (`_csrf_proof`)
 

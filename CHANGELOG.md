@@ -5,6 +5,20 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 does not strictly follow SemVer for pre-1.0-style breaking changes across minor versions — see
 each entry's "Breaking" notes.
 
+## [1.7.0] — 2026-11-01
+
+### Added
+
+- **Per-container `private_key`**: a container option that replaces the `Csrf` instance's
+  master `$cipherKey` as the HKDF base for that one container's encryption and proof keys.
+  Lets a separately deployed consumer (e.g. a standalone side script) issue/validate just that
+  container's tokens by holding only its dedicated key — never the master key, and never any
+  other container's key. `withContainer()` throws `\InvalidArgumentException` if a supplied
+  `private_key` is not exactly 32 bytes. Threaded through every existing key-derivation call
+  site (`generateFor()`, `validateFor()`, `issueFor()`, `debugValidate()`, and the proof check)
+  via the already-resolved per-container config — no new parameter on any public method, so
+  `CsrfCacheWrapper`'s fast path (`validateCachedFor()`) inherits it automatically.
+
 ## [1.6.0] — 2026-09-16
 
 ### Added
