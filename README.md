@@ -4,6 +4,31 @@ Each form (container) has its own session bucket, derived key (HKDF) and optiona
 Tokens are bound to container id, client IP, User‑Agent, and origin (all configurable), with
 an optional session-bound HMAC proof as a second, independent field.
 
+
+
+## License
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+```text
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files, to deal in the Software
+without restriction.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+Source: https://opensource.org/licenses/MIT
+```
+See [LICENSE](LICENSE) for full details.
+## Authors
+
+- Rafał Masiarek | [website](https://masiarek.pl) | [email](mailto:rafal@masiarek.pl) | [github](https://github.com/rafalmasiarek)
+
+
 ## Features
 
 - Stateless encrypted token (payload: token, ip, ua, origin, iat, container id)
@@ -73,6 +98,62 @@ $ok = $csrfCached->validateFor('signup', $_POST['_csrf'] ?? '');
 - `RedisStorage(Redis $redis, string $prefix = 'csrf:', int $ttl = 900)`
 
 > Storage keys are hashed; for multi‑containers we pass a composite `"<container>|<token>"` to avoid collisions.
+
+
+## Examples
+
+See [`example/`](example/) for drop‑in snippets:
+- `basic/index.php`
+- `containers/index.php`
+- `fileCache/index.php`
+- `ipOverride/index.php`
+- `mysql/schema.sql`
+
+## View Helpers
+
+All three helpers below render through `HtmlHelper::input()`, which transparently emits a
+`_csrf_proof` hidden field alongside `_csrf` whenever a session is active — no changes needed
+to benefit from it (see [Session-Bound Proof](#session-bound-proof-_csrf_proof)).
+
+### Plates (League\Plates)
+```php
+use League\Plates\Engine;
+use rafalmasiarek\Csrf\Csrf;
+use rafalmasiarek\Csrf\Helpers\Plates\CsrfExtension;
+
+$view = new Engine(__DIR__.'/views');
+$csrf = new Csrf($masterKey, 900);
+CsrfExtension::register($view, $csrf);
+
+// In template: <?= csrf_field('signup') ?>
+```
+
+### Twig
+```php
+use Twig\Environment;
+use Twig\Loader\FilesystemLoader;
+use rafalmasiarek\Csrf\Csrf;
+use rafalmasiarek\Csrf\Helpers\Twig\CsrfExtension;
+
+$twig = new Environment(new FilesystemLoader(__DIR__.'/views'));
+$csrf = new Csrf($masterKey, 900);
+$twig->addExtension(new CsrfExtension($csrf));
+
+// In template: {{ csrf_field('signup')|raw }}
+```
+
+### Blade (Laravel)
+```php
+use Illuminate\View\Compilers\BladeCompiler;
+use rafalmasiarek\Csrf\Csrf;
+use rafalmasiarek\Csrf\Helpers\Blade\CsrfBlade;
+
+// In a service provider boot():
+CsrfBlade::register($this->app->make(BladeCompiler::class), app(Csrf::class));
+
+// In Blade: @csrfField('signup')
+```
+
 
 ## Security Notes
 
@@ -375,7 +456,6 @@ setInterval(() => {
 Applications that intentionally reuse a token across multiple requests are outside this
 library's model — `single_use` is not configurable, by design.
 
----
 
 ## Migration
 
@@ -411,83 +491,6 @@ library's model — `single_use` is not configurable, by design.
 
 - Namespace unified under `rafalmasiarek\Csrf` and PSR‑4 autoloading.
 
-## Examples
-
-See [`example/`](example/) for drop‑in snippets:
-- `basic/index.php`
-- `containers/index.php`
-- `fileCache/index.php`
-- `ipOverride/index.php`
-- `mysql/schema.sql`
-
-## View Helpers
-
-All three helpers below render through `HtmlHelper::input()`, which transparently emits a
-`_csrf_proof` hidden field alongside `_csrf` whenever a session is active — no changes needed
-to benefit from it (see [Session-Bound Proof](#session-bound-proof-_csrf_proof)).
-
-### Plates (League\Plates)
-```php
-use League\Plates\Engine;
-use rafalmasiarek\Csrf\Csrf;
-use rafalmasiarek\Csrf\Helpers\Plates\CsrfExtension;
-
-$view = new Engine(__DIR__.'/views');
-$csrf = new Csrf($masterKey, 900);
-CsrfExtension::register($view, $csrf);
-
-// In template: <?= csrf_field('signup') ?>
-```
-
-### Twig
-```php
-use Twig\Environment;
-use Twig\Loader\FilesystemLoader;
-use rafalmasiarek\Csrf\Csrf;
-use rafalmasiarek\Csrf\Helpers\Twig\CsrfExtension;
-
-$twig = new Environment(new FilesystemLoader(__DIR__.'/views'));
-$csrf = new Csrf($masterKey, 900);
-$twig->addExtension(new CsrfExtension($csrf));
-
-// In template: {{ csrf_field('signup')|raw }}
-```
-
-### Blade (Laravel)
-```php
-use Illuminate\View\Compilers\BladeCompiler;
-use rafalmasiarek\Csrf\Csrf;
-use rafalmasiarek\Csrf\Helpers\Blade\CsrfBlade;
-
-// In a service provider boot():
-CsrfBlade::register($this->app->make(BladeCompiler::class), app(Csrf::class));
-
-// In Blade: @csrfField('signup')
-```
-
-
-
-## License
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-```text
-The MIT License (MIT)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files, to deal in the Software
-without restriction.
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
-
-Source: https://opensource.org/licenses/MIT
-```
-See [LICENSE](LICENSE) for full details.
-## Authors
-
-- Rafał Masiarek | [website](https://masiarek.pl) | [email](mailto:rafal@masiarek.pl) | [github](https://github.com/rafalmasiarek)
 
 
 ## Index
