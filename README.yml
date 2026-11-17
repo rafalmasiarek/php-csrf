@@ -9,7 +9,7 @@ context:
     Tokens are bound to container id, client IP, User‑Agent, and origin (all configurable), with
     an optional session-bound HMAC proof as a second, independent field.
 
-includes:
+footer_includes:
   - docs/usage.md
   - docs/security.md
   - docs/migration.md
